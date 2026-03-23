@@ -1,4 +1,4 @@
-"""
+r"""
 Phoenix格式时间序列读写模块
 
 基于Phoenix MTU-5A数据格式
@@ -172,7 +172,7 @@ class TblFile:
     
     TYPE_MAP = {0: 'l', 1: 'd', 2: '9s', 5: '7B'}
     
-    def __init__(self, path: str = None):
+    def __init__(self, path: Optional[str] = None):
         self.info = {}
         self.info_type = {}
         if path:
