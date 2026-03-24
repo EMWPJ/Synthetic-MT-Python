@@ -6,6 +6,11 @@ from .value_objects import (
     NoiseConfig,
     TS_CONFIGS,
 )
+from .entities import (
+    EMFields,
+    ForwardSite,
+    nature_magnetic_amplitude,
+)
 
 __all__ = [
     'SyntheticMethod',
@@ -13,4 +18,7 @@ __all__ = [
     'NoiseType',
     'NoiseConfig',
     'TS_CONFIGS',
+    'EMFields',
+    'ForwardSite',
+    'nature_magnetic_amplitude',
 ]
