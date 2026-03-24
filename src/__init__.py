@@ -6,18 +6,21 @@ Synthesizing magnetotelluric time series based on forward modeling
 Front. Earth Sci. 11:1086749
 """
 
-from .synthetic_mt import (
+from .domain import (
     SyntheticMethod,
     SYNTHETIC_METHOD_NAMES,
+    NoiseType,
+    NoiseConfig,
+    TS_CONFIGS,
+)
+
+from .synthetic_mt import (
     EMFields,
     ForwardSite,
     SyntheticSchema,
     SyntheticTimeSeries,
-    TS_CONFIGS,
     load_modem_file,
     create_test_site,
-    NoiseType,
-    NoiseConfig,
     NoiseInjector,
     add_powerline_interference,
     CalibrationData,
