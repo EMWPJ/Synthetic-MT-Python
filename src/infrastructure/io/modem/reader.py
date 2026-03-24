@@ -7,8 +7,8 @@ forward modeling format. It wraps the domain parsing logic from synthesis.py.
 from typing import List
 from pathlib import Path
 
-from ...domain.services.synthesis import load_modem_file as domain_load_modem_file
-from ...domain.entities import ForwardSite
+from ....domain.services.synthesis import load_modem_file as domain_load_modem_file
+from ....domain.entities import ForwardSite
 
 
 class ModEMReader:
