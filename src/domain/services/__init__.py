@@ -16,6 +16,13 @@ from .synthesis import (
     load_modem_file,
 )
 
+from .noise import (
+    NoiseInjector,
+    NoiseConfig,
+    NoiseType,
+    add_powerline_interference,
+)
+
 __all__ = [
     'freq_to_time',
     'hanning_window',
@@ -25,4 +32,8 @@ __all__ = [
     'calculate_mt_scale_factors',
     'create_test_site',
     'load_modem_file',
+    'NoiseInjector',
+    'NoiseConfig',
+    'NoiseType',
+    'add_powerline_interference',
 ]
