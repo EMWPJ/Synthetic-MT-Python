@@ -47,6 +47,10 @@ Thumbs.db
 *.npy
 *.npz
 
+# Worktrees
+.worktrees/
+worktrees/
+
 # Test
 .pytest_cache/
 .coverage
