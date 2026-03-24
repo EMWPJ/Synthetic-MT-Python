@@ -5,6 +5,16 @@ application services, DTOs (Data Transfer Objects), and coordinates the
 flow of data between the domain and infrastructure layers.
 """
 
-from typing import Any
+from .dto import (
+    OutputFormat,
+    SynthesisRequest,
+    SynthesisResult,
+)
+from .synthesis_use_case import SynthesisUseCase
 
-__all__: list[str] = []
+__all__ = [
+    'OutputFormat',
+    'SynthesisRequest',
+    'SynthesisResult',
+    'SynthesisUseCase',
+]

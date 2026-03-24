@@ -25,23 +25,23 @@ from .domain.services.synthesis import (
     freq_to_time,
     hanning_window,
     inv_hanning_window,
-    SynthesisSchema,
+    SyntheticSchema,
     SyntheticTimeSeries,
     calculate_mt_scale_factors,
     create_test_site,
     load_modem_file,
 )
 from .domain.services.noise import NoiseInjector, add_powerline_interference
-from .domain.services.calibration import (
-    CalibrationData,
-    SystemCalibrator,
-    ClbFile,
-    ClcFile,
-)
+# Calibration classes (planned but not yet implemented)
+# from .domain.services.calibration import (
+#     CalibrationData,
+#     SystemCalibrator,
+#     ClbFile,
+#     ClcFile,
+# )
 
 # Infrastructure layer
-from .infrastructure.io.modem import ModemReader
-from .infrastructure.io.phoenix import TsnFile, TblFile, TagInfo
+from .infrastructure.io import ModEMReader, TsnFile, TblFile, TagInfo
 from .infrastructure.io.output import (
     save_gmt_timeseries,
     save_csv_timeseries,
@@ -73,7 +73,7 @@ __all__ = [
     'freq_to_time',
     'hanning_window',
     'inv_hanning_window',
-    'SynthesisSchema',
+    'SyntheticSchema',
     'SyntheticTimeSeries',
     'calculate_mt_scale_factors',
     'create_test_site',
@@ -81,13 +81,8 @@ __all__ = [
     # Noise
     'NoiseInjector',
     'add_powerline_interference',
-    # Calibration
-    'CalibrationData',
-    'SystemCalibrator',
-    'ClbFile',
-    'ClcFile',
     # Infrastructure
-    'ModemReader',
+    'ModEMReader',
     'TsnFile',
     'TblFile',
     'TagInfo',

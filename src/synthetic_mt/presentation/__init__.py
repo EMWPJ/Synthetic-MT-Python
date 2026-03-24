@@ -5,6 +5,9 @@ capturing user commands. It includes GUI components, CLI interfaces,
 and any presentation-specific logic.
 """
 
-from typing import Any
+try:
+    from .gui import SyntheticMTGui
+except ImportError:
+    SyntheticMTGui = None
 
-__all__: list[str] = []
+__all__ = ['SyntheticMTGui']
