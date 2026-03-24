@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthetic-mt"
+version = "0.1.0"
+description = "Magnetotelluric time series synthesis based on forward modeling"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Wang P"},
+    {name = "Chen X"},
+    {name = "Zhang Y"}
+]
+keywords = ["magnetotelluric", "mt", "time-series", "synthesis", "forward-modeling", "geophysics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Topic :: Scientific/Engineering",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+advanced = [
+    "scipy",
+]
+
+[project.urls]
+Homepage = "https://github.com/EMWPJ/Synthetic-MT-Python"
+Paper = "https://www.frontiersin.org/articles/10.3389/feart.2023.1086749"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"

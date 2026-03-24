@@ -112,10 +112,13 @@ class TsnFile:
             write_channel(ex), write_channel(ey), write_channel(hx),
             write_channel(hy), write_channel(hz)
         ], axis=1)
-        
-        tsn_bytes = np.concatenate([tags[:n_records], data_bytes], axis=1).reshape(-1)
-        with open(path, 'wb') as f:
-            f.write(tsn_bytes.astype(np.uint8).tobytes())
+
+        # 构建完整记录: tag + data (交替存储)
+        record_len = 32 + scans * channel * 3
+        records = np.empty((n_records, record_len), dtype=np.uint8)
+        records[:, :32] = tags[:n_records]
+        records[:, 32:] = data_bytes
+        records.tofile(path)
     
     @staticmethod
     def parse_tags(tag_bytes: np.ndarray, 
@@ -163,6 +166,169 @@ class TsnFile:
         ])
         
         return tags, time_labels
+
+    @staticmethod
+    def generate_tags(start_time: datetime, scans: int, channel: int = 5,
+                       sample_rate: int = 2400, serial_number: int = 0,
+                       n_records: int = 1) -> np.ndarray:
+        """
+        生成32字节tag头部
+
+        Parameters:
+            start_time: 记录开始时间
+            scans: 每条记录的采样点数
+            channel: 通道数，默认5
+            sample_rate: 采样率，默认2400
+            serial_number: 序列号，默认0
+            n_records: 生成的记录数，默认1
+
+        Returns:
+            (n_records, 32) tag字节数组
+        """
+        record_len = 32 + scans * channel * 3  # tag + data
+
+        tags = np.zeros((n_records, 32), dtype=np.uint8)
+
+        for i in range(n_records):
+            # 计算每条记录的时间
+            record_time = start_time.replace(second=0, microsecond=0)
+            if i > 0:
+                # 假设每条记录是一个完整的小时（3600秒）或根据采样率计算
+                record_time = start_time.replace(second=0, microsecond=0)
+
+            # Bytes 0-5: 时间字段
+            tags[i, 0] = record_time.second          # second
+            tags[i, 1] = record_time.minute          # minute
+            tags[i, 2] = record_time.hour             # hour
+            tags[i, 3] = record_time.day             # day
+            tags[i, 4] = record_time.month          # month
+            tags[i, 5] = record_time.year - 100     # year - 100 (Phoenix格式)
+
+            # Bytes 6-7: ToDo (保留)
+            # tags[i, 6] and tags[i, 7] remain 0
+
+            # Bytes 8-9: 序列号 (little endian)
+            tags[i, 8] = serial_number & 0xFF
+            tags[i, 9] = (serial_number >> 8) & 0xFF
+
+            # Bytes 10-11: scans (little endian)
+            tags[i, 10] = scans & 0xFF
+            tags[i, 11] = (scans >> 8) & 0xFF
+
+            # Byte 12: 通道数
+            tags[i, 12] = channel
+
+            # Byte 13: 记录长度 (tag + data)
+            tags[i, 13] = record_len & 0xFF
+
+            # Bytes 14-17: flags (保留)
+            # tags[i, 14:18] remain 0
+
+            # Bytes 18-19: 采样率 (little endian)
+            tags[i, 18] = sample_rate & 0xFF
+            tags[i, 19] = (sample_rate >> 8) & 0xFF
+
+            # Bytes 20-31: clock status/error (保留)
+            # tags[i, 20:32] remain 0
+
+        return tags
+
+    @staticmethod
+    def create_ts_file(path: str, ex: np.ndarray, ey: np.ndarray,
+                       hx: np.ndarray, hy: np.ndarray, hz: np.ndarray,
+                       start_time: datetime, sample_rate: int = 2400,
+                       scans_per_record: int = None) -> None:
+        """
+        创建完整的TSn文件
+
+        Parameters:
+            path: 输出文件路径
+            ex, ey, hx, hy, hz: 时间序列数据 (float或int)
+            start_time: 开始时间
+            sample_rate: 采样率，默认2400
+            scans_per_record: 每条记录的采样点数，默认根据TS类型确定
+        """
+        # 确定scans_per_record
+        if scans_per_record is None:
+            # 根据采样率确定默认值
+            if sample_rate >= 2400:
+                scans_per_record = 16384  # TS3: 2400Hz, ~6.8秒
+            elif sample_rate >= 150:
+                scans_per_record = 1800   # TS4: 150Hz, 12秒
+            else:
+                scans_per_record = 900   # TS5: 15Hz, 60秒
+
+        channel = 5
+        n_samples = len(ex)
+        n_records = (n_samples + scans_per_record - 1) // scans_per_record
+
+        # 确保数据长度是scans_per_record的整数倍
+        total_samples = n_records * scans_per_record
+        if len(ex) < total_samples:
+            # 填充到整数倍
+            pad_len = total_samples - len(ex)
+            ex = np.pad(ex.astype(np.float64), (0, pad_len), mode='constant')
+            ey = np.pad(ey.astype(np.float64), (0, pad_len), mode='constant')
+            hx = np.pad(hx.astype(np.float64), (0, pad_len), mode='constant')
+            hy = np.pad(hy.astype(np.float64), (0, pad_len), mode='constant')
+            hz = np.pad(hz.astype(np.float64), (0, pad_len), mode='constant')
+
+        # 转换为24位整数 (float -> 24-bit int)
+        def convert_to_24bit(data):
+            # 归一化到24位范围 [-2^23, 2^23-1]
+            # 假设输入是 mV/km for E (范围约 ±1000) 和 nT for H (范围约 ±1000)
+            data = data.copy()
+            # 缩放到24位范围
+            scale = (2**23 - 1) / max(abs(data.max()), abs(data.min()), 1e-10)
+            data = data * scale
+            # 转换为int32
+            data_int = data.astype(np.int32)
+            # 限制在24位范围
+            data_int = np.clip(data_int, -2**23, 2**23 - 1)
+            return data_int
+
+        ex_int = convert_to_24bit(ex)
+        ey_int = convert_to_24bit(ey)
+        hx_int = convert_to_24bit(hx)
+        hy_int = convert_to_24bit(hy)
+        hz_int = convert_to_24bit(hz)
+
+        # 生成tag头部
+        tags = TsnFile.generate_tags(start_time, scans_per_record, channel,
+                                     sample_rate, serial_number=0,
+                                     n_records=n_records)
+
+        # 重塑数据为(n_records, scans_per_record)
+        ex_reshaped = ex_int.reshape(n_records, scans_per_record)
+        ey_reshaped = ey_int.reshape(n_records, scans_per_record)
+        hx_reshaped = hx_int.reshape(n_records, scans_per_record)
+        hy_reshaped = hy_int.reshape(n_records, scans_per_record)
+        hz_reshaped = hz_int.reshape(n_records, scans_per_record)
+
+        def write_channel(ch):
+            ch = TsnFile._unmask_data(ch)
+            b0 = ch & 0xFF
+            b1 = (ch >> 8) & 0xFF
+            b2 = (ch >> 16) & 0xFF
+            return np.concatenate([b0, b1, b2], axis=1)
+
+        # 写入各通道
+        data_bytes = np.concatenate([
+            write_channel(ex_reshaped), write_channel(ey_reshaped),
+            write_channel(hx_reshaped), write_channel(hy_reshaped),
+            write_channel(hz_reshaped)
+        ], axis=1)
+
+        # 构建完整记录: tag + data (交替存储)
+        # data_bytes: (n_records, scans_per_record * channel * 3)
+        # 需要变为: 每条记录 [tag(32) | data(scans_per_record * channel * 3)]
+        record_len = 32 + scans_per_record * channel * 3
+        records = np.zeros((n_records, record_len), dtype=np.uint8)
+        records[:, :32] = tags
+        records[:, 32:] = data_bytes
+
+        # 写入文件
+        records.tofile(path)
 
 
 class TblFile:
@@ -221,7 +387,111 @@ class TblFile:
         return self.info.get(key)
     
     def __setitem__(self, key: str, value):
+        """设置TBL字段值，自动推断类型"""
         self.info[key] = value
+        # 自动推断并设置类型
+        if key not in self.info_type:
+            if isinstance(value, int):
+                self.info_type[key] = 0  # long
+            elif isinstance(value, float):
+                self.info_type[key] = 1  # double
+            elif isinstance(value, str):
+                self.info_type[key] = 2  # string
+            elif isinstance(value, tuple):
+                self.info_type[key] = 5  # time
     
     def keys(self):
         return self.info.keys()
+    
+    def clear(self):
+        """清空所有配置"""
+        self.info = {}
+        self.info_type = {}
+    
+    def remove(self, key: str):
+        """删除指定配置项"""
+        if key in self.info:
+            del self.info[key]
+        if key in self.info_type:
+            del self.info_type[key]
+    
+    def __contains__(self, key: str) -> bool:
+        """检查配置项是否存在"""
+        return key in self.info
+    
+    def update(self, data: dict):
+        """批量更新配置"""
+        for key, value in data.items():
+            self[key] = value
+
+    def create_site_config(self, site_name: str, box_sn: int,
+                           hx_sn: int = 0, hy_sn: int = 0, hz_sn: int = 0,
+                           ex_length: float = 100.0, ey_length: float = 100.0,
+                           sample_interval: float = 1.0) -> None:
+        """
+        创建站点配置文件
+
+        Parameters:
+            site_name: 站点名称
+            box_sn: 采集箱序列号
+            hx_sn: Hx传感器序列号
+            hy_sn: Hy传感器序列号
+            hz_sn: Hz传感器序列号
+            ex_length: Ex电极长度(m)
+            ey_length: Ey电极长度(m)
+            sample_interval: 采样间隔(ms)
+        """
+        # 清空现有配置
+        self.info = {}
+        self.info_type = {}
+
+        # 字符串类型配置
+        self.info['SITE'] = site_name[:8].ljust(8, '\x00') if len(site_name) < 8 else site_name[:8]
+        self.info_type['SITE'] = 2
+
+        # 整数类型配置
+        self.info['BOXN'] = box_sn
+        self.info_type['BOXN'] = 0
+
+        self.info['HXSN'] = hx_sn
+        self.info_type['HXSN'] = 0
+
+        self.info['HYSN'] = hy_sn
+        self.info_type['HYSN'] = 0
+
+        self.info['HZSN'] = hz_sn
+        self.info_type['HZSN'] = 0
+
+        # 浮点类型配置
+        self.info['EXLN'] = ex_length
+        self.info_type['EXLN'] = 1
+
+        self.info['EYLN'] = ey_length
+        self.info_type['EYLN'] = 1
+
+        # 采样间隔 (ms)
+        self.info['HSMP'] = sample_interval
+        self.info_type['HSMP'] = 1
+
+        # 默认时间配置 (dtype=5: time)
+        # 时间格式: (ms, second, minute, hour, day, month, year, tz)
+        # STIM: 开始时间 (设置为当前时间)
+        now = datetime.now()
+        self.info['STIM'] = (0, now.second, now.minute, now.hour,
+                           now.day, now.month, now.year - 2000, 0)
+        self.info_type['STIM'] = 5
+
+        # ETIM: 结束时间
+        self.info['ETIM'] = (0, now.second, now.minute, now.hour,
+                           now.day, now.month, now.year - 2000, 0)
+        self.info_type['ETIM'] = 5
+
+        # FTIM: 首次采样时间 (同STIM)
+        self.info['FTIM'] = (0, now.second, now.minute, now.hour,
+                           now.day, now.month, now.year - 2000, 0)
+        self.info_type['FTIM'] = 5
+
+        # LTIM: 最近采样时间 (同ETIM)
+        self.info['LTIM'] = (0, now.second, now.minute, now.hour,
+                           now.day, now.month, now.year - 2000, 0)
+        self.info_type['LTIM'] = 5

@@ -117,6 +117,156 @@ class ForwardSite:
                 f.hy2 = complex(abs(f.hy2) * scale_b[i], f.hy2.imag)
                 f.hz2 = complex(abs(f.hz2) * scale_b[i], f.hz2.imag)
 
+    def interpolation(self, per_count: int):
+        """
+        Add interpolated frequency points between existing frequencies.
+        
+        Uses log-linear interpolation in frequency domain. For each pair of
+        adjacent frequency points, adds per_count interpolated points.
+        
+        Parameters:
+            per_count: Number of interpolated points to add between each pair
+        """
+        if len(self.fields) < 2:
+            return
+        
+        # Sort fields by frequency first
+        self.fields.sort(key=lambda f: f.freq)
+        
+        new_fields = []
+        field_names = ['ex1', 'ey1', 'hx1', 'hy1', 'hz1', 'ex2', 'ey2', 
+                       'hx2', 'hy2', 'hz2', 'zxx', 'zxy', 'zyx', 'zyy', 'tzx', 'tzy']
+        
+        for i in range(len(self.fields) - 1):
+            f1 = self.fields[i]
+            f2 = self.fields[i + 1]
+            
+            # Add the first field
+            new_fields.append(f1)
+            
+            # Create interpolated points
+            log_f1 = np.log10(f1.freq)
+            log_f2 = np.log10(f2.freq)
+            
+            for j in range(1, per_count + 1):
+                scale = j / (per_count + 1)
+                new_freq = 10 ** (log_f1 + scale * (log_f2 - log_f1))
+                
+                new_field = EMFields(freq=new_freq)
+                
+                for name in field_names:
+                    val1 = getattr(f1, name)
+                    val2 = getattr(f2, name)
+                    # Log-linear interpolation for complex values
+                    new_val = complex(
+                        10 ** (np.log10(abs(val1) + 1e-20) + scale * (np.log10(abs(val2) + 1e-20) - np.log10(abs(val1) + 1e-20))),
+                        val1.imag + scale * (val2.imag - val1.imag)
+                    )
+                    setattr(new_field, name, new_val)
+                
+                new_fields.append(new_field)
+        
+        # Add the last field
+        new_fields.append(self.fields[-1])
+        
+        self.fields = new_fields
+    
+    def negative_harmonic_factor(self):
+        """
+        Apply conjugate transformation to all field components.
+        
+        Applies .conjugate to all complex field components: ex1, ey1, hx1,
+        hy1, hz1, ex2, ey2, hx2, hy2, hz2, zxx, zxy, zyx, zyy, tzx, tzy
+        """
+        field_names = ['ex1', 'ey1', 'hx1', 'hy1', 'hz1', 'ex2', 'ey2',
+                       'hx2', 'hy2', 'hz2', 'zxx', 'zxy', 'zyx', 'zyy', 'tzx', 'tzy']
+        
+        for f in self.fields:
+            for name in field_names:
+                val = getattr(f, name)
+                if isinstance(val, complex):
+                    setattr(f, name, val.conjugate())
+    
+    def get_feh1(self):
+        """
+        Get fields with unit conversion (like Delphi GetFEH1).
+        
+        Returns:
+            Tuple of (freq, Ex1, Ey1, Hx1, Hy1, Hz1, Ex2, Ey2, Hx2, Hy2, Hz2) arrays
+            
+        Unit conversions applied:
+            - Ex *= 1E6
+            - Ey *= 1E6
+            - Hx *= 4E2 * np.pi
+            - Hy *= 4E2 * np.pi
+            - Hz *= 4E2 * np.pi
+        """
+        n = len(self.fields)
+        fre = np.zeros(n)
+        Ex1 = np.zeros(n, dtype=complex)
+        Ey1 = np.zeros(n, dtype=complex)
+        Hx1 = np.zeros(n, dtype=complex)
+        Hy1 = np.zeros(n, dtype=complex)
+        Hz1 = np.zeros(n, dtype=complex)
+        Ex2 = np.zeros(n, dtype=complex)
+        Ey2 = np.zeros(n, dtype=complex)
+        Hx2 = np.zeros(n, dtype=complex)
+        Hy2 = np.zeros(n, dtype=complex)
+        Hz2 = np.zeros(n, dtype=complex)
+        
+        for i, f in enumerate(self.fields):
+            fre[i] = f.freq
+            Ex1[i] = f.ex1 * 1e6
+            Ey1[i] = f.ey1 * 1e6
+            Hx1[i] = f.hx1 * 4e2 * np.pi
+            Hy1[i] = f.hy1 * 4e2 * np.pi
+            Hz1[i] = f.hz1 * 4e2 * np.pi
+            Ex2[i] = f.ex2 * 1e6
+            Ey2[i] = f.ey2 * 1e6
+            Hx2[i] = f.hx2 * 4e2 * np.pi
+            Hy2[i] = f.hy2 * 4e2 * np.pi
+            Hz2[i] = f.hz2 * 4e2 * np.pi
+        
+        return fre, Ex1, Ey1, Hx1, Hy1, Hz1, Ex2, Ey2, Hx2, Hy2, Hz2
+    
+    def add_calibration(self, responds: np.ndarray):
+        """
+        Apply system response calibration to fields.
+        
+        Parameters:
+            responds: System response array of shape (5, n_frequencies)
+                     Channel mapping: 0=Ex, 1=Ey, 2=Hx, 3=Hy, 4=Hz
+                     
+        Note:
+            For electric fields (Ex, Ey): field /= responds[channel]
+            For magnetic fields (Hx, Hy, Hz): field /= responds[channel] * 4E-7 * np.pi
+        """
+        if len(self.fields) == 0:
+            return
+        
+        n_frequencies = len(self.fields)
+        if responds.shape[1] != n_frequencies:
+            raise ValueError(f"responds shape {responds.shape} doesn't match {n_frequencies} frequencies")
+        
+        field_mapping = {
+            'ex1': 0, 'ey1': 1, 'hx1': 2, 'hy1': 3, 'hz1': 4,
+            'ex2': 0, 'ey2': 1, 'hx2': 2, 'hy2': 3, 'hz2': 4,
+        }
+        
+        magnetic_fields = {'hx1', 'hy1', 'hz1', 'hx2', 'hy2', 'hz2'}
+        
+        for i, f in enumerate(self.fields):
+            for name, channel_idx in field_mapping.items():
+                val = getattr(f, name)
+                resp = responds[channel_idx, i]
+                
+                if abs(resp) > 1e-20:
+                    if name in magnetic_fields:
+                        val = val / (resp * 4e-7 * np.pi)
+                    else:
+                        val = val / resp
+                    setattr(f, name, val)
+
 
 def nature_magnetic_amplitude(freq: float) -> float:
     """
