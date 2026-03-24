@@ -8,12 +8,13 @@ SyntheticMT - 大地电磁合成时间序列生成工具
 import argparse
 import sys
 from datetime import datetime
-from src import (
+from synthetic_mt import (
     SyntheticTimeSeries, SyntheticSchema, SyntheticMethod, create_test_site,
     NoiseType, NoiseConfig, NoiseInjector, load_modem_file,
-    TsnFile, TblFile, ClbFile, ClcFile,
     SYNTHETIC_METHOD_NAMES, TS_CONFIGS
 )
+from phoenix import TsnFile, TblFile
+from synthetic_mt import ClbFile, ClcFile
 
 
 def generate_timeseries(args):

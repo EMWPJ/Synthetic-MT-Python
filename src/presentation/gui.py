@@ -21,12 +21,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QThread, Signal, Qt, QTimer, QDateTime
 from PySide6.QtGui import QFont
 
-from .synthetic_mt import (
+from synthetic_mt import (
     SyntheticTimeSeries, SyntheticSchema, SyntheticMethod, ForwardSite, EMFields,
     create_test_site, load_modem_file, TS_CONFIGS, SYNTHETIC_METHOD_NAMES,
     NoiseType, NoiseConfig, NoiseInjector
 )
-from .phoenix import TsnFile, TblFile
+from phoenix import TsnFile, TblFile
 
 
 class GenerationThread(QThread):
@@ -453,7 +453,7 @@ class SyntheticMTGui(QMainWindow):
         if not self.current_result:
             return
         
-        from src.synthetic_mt import save_gmt_timeseries, save_csv_timeseries, save_numpy_timeseries
+        from synthetic_mt import save_gmt_timeseries, save_csv_timeseries, save_numpy_timeseries
         
         ex, ey, hx, hy, hz = self.current_result
         output_path = Path(self.edit_output_path.text())
