@@ -13,8 +13,14 @@ from ..entities import EMFields, ForwardSite, nature_magnetic_amplitude
 from ..value_objects import TS_CONFIGS, SyntheticMethod
 
 
-def freq_to_time(amp: float, phase: float, freq: float,
-                 sample_rate: float, n: int, output: np.ndarray) -> None:
+def freq_to_time(
+    amp: float,
+    phase: float,
+    freq: float,
+    sample_rate: float,
+    n: int,
+    output: np.ndarray,
+) -> None:
     """频域转时域: E(t) = A * cos(2πft + φ)"""
     t = np.arange(n, dtype=np.float64) / sample_rate
     output[:] = amp * np.cos(2 * np.pi * freq * t + phase)
@@ -33,11 +39,16 @@ def inv_hanning_window(n: int) -> np.ndarray:
 class SyntheticSchema:
     """合成参数配置"""
 
-    def __init__(self, name: str = 'TS3', sample_rate: float = 2400,
-                 freq_min: float = 1, freq_max: float = 1000,
-                 synthetic_periods: float = 8.0,
-                 source_scale: float = 1.0,
-                 continuous: bool = False):
+    def __init__(
+        self,
+        name: str = "TS3",
+        sample_rate: float = 2400,
+        freq_min: float = 1,
+        freq_max: float = 1000,
+        synthetic_periods: float = 8.0,
+        source_scale: float = 1.0,
+        continuous: bool = False,
+    ):
         self.name = name
         self.sample_rate = sample_rate
         self.freq_min = freq_min
@@ -48,7 +59,7 @@ class SyntheticSchema:
 
     @classmethod
     def from_ts(cls, ts_name: str, **kwargs):
-        config = TS_CONFIGS.get(ts_name, TS_CONFIGS['TS3'])
+        config = TS_CONFIGS.get(ts_name, TS_CONFIGS["TS3"])
         config = config.copy()
         config.update(kwargs)
         return cls(name=ts_name, **config)
@@ -67,7 +78,9 @@ def calculate_mt_scale_factors(site: ForwardSite) -> Tuple[np.ndarray, np.ndarra
     Returns:
         (scale_e, scale_b): 电场和磁场缩放因子数组
     """
-    from ..value_objects import SyntheticMethod  # Import here to avoid circular dependency at module level
+    from ..value_objects import (
+        SyntheticMethod,
+    )  # Import here to avoid circular dependency at module level
 
     freqs = site.frequencies()
     n = len(freqs)
@@ -92,13 +105,17 @@ def calculate_mt_scale_factors(site: ForwardSite) -> Tuple[np.ndarray, np.ndarra
             if h2_mag > 0:
                 scale_b[i] = min(scale_b[i], nat_b / h2_mag)
 
-            e1_mag = np.sqrt(abs(site.fields[i].ex1)**2 + abs(site.fields[i].ey1)**2)
-            e2_mag = np.sqrt(abs(site.fields[i].ex2)**2 + abs(site.fields[i].ey2)**2)
+            e1_mag = np.sqrt(
+                abs(site.fields[i].ex1) ** 2 + abs(site.fields[i].ey1) ** 2
+            )
+            e2_mag = np.sqrt(
+                abs(site.fields[i].ex2) ** 2 + abs(site.fields[i].ey2) ** 2
+            )
 
             if e1_mag > 0 or e2_mag > 0:
                 scale_e[i] = min(
-                    (nat_b * 377.0) / e1_mag if e1_mag > 0 else float('inf'),
-                    (nat_b * 377.0) / e2_mag if e2_mag > 0 else float('inf')
+                    (nat_b * 377.0) / e1_mag if e1_mag > 0 else float("inf"),
+                    (nat_b * 377.0) / e2_mag if e2_mag > 0 else float("inf"),
                 )
 
     return scale_e, scale_b
@@ -107,13 +124,21 @@ def calculate_mt_scale_factors(site: ForwardSite) -> Tuple[np.ndarray, np.ndarra
 class SyntheticTimeSeries:
     """合成时间序列主类"""
 
-    def __init__(self, schema: SyntheticSchema,
-                 method: Optional[SyntheticMethod] = None):
+    def __init__(
+        self, schema: SyntheticSchema, method: Optional[SyntheticMethod] = None
+    ):
         self.schema = schema
-        self.method = method if method is not None else SyntheticMethod.RANDOM_SEG_PARTIAL
+        self.method = (
+            method if method is not None else SyntheticMethod.RANDOM_SEG_PARTIAL
+        )
 
-    def generate(self, begin_time: datetime, end_time: datetime,
-                 site: ForwardSite, seed: Optional[int] = None) -> Tuple[np.ndarray, ...]:
+    def generate(
+        self,
+        begin_time: datetime,
+        end_time: datetime,
+        site: ForwardSite,
+        seed: Optional[int] = None,
+    ) -> Tuple[np.ndarray, ...]:
         """
         生成合成时间序列
 
@@ -147,40 +172,58 @@ class SyntheticTimeSeries:
             delta_pha1 = delta_pha1 - (int(delta_pha1 * 180 / np.pi) // 360) * 2 * np.pi
             delta_pha2 = delta_pha1 + np.pi / 4
 
-            amps1 = np.array([
-                abs(f.ex1), abs(f.ey1), abs(f.hx1), abs(f.hy1), abs(f.hz1)
-            ]) * self.schema.source_scale
-            phas1 = np.array([
-                np.angle(f.ex1) + np.pi + delta_pha1,
-                np.angle(f.ey1) + np.pi + delta_pha1,
-                np.angle(f.hx1) + delta_pha1,
-                np.angle(f.hy1) + delta_pha1,
-                np.angle(f.hz1) + delta_pha1,
-            ])
+            amps1 = (
+                np.array([abs(f.ex1), abs(f.ey1), abs(f.hx1), abs(f.hy1), abs(f.hz1)])
+                * self.schema.source_scale
+            )
+            phas1 = np.array(
+                [
+                    np.angle(f.ex1) + np.pi + delta_pha1,
+                    np.angle(f.ey1) + np.pi + delta_pha1,
+                    np.angle(f.hx1) + delta_pha1,
+                    np.angle(f.hy1) + delta_pha1,
+                    np.angle(f.hz1) + delta_pha1,
+                ]
+            )
 
-            amps2 = np.array([
-                abs(f.ex2), abs(f.ey2), abs(f.hx2), abs(f.hy2), abs(f.hz2)
-            ]) * self.schema.source_scale
-            phas2 = np.array([
-                np.angle(f.ex2) + np.pi + delta_pha2,
-                np.angle(f.ey2) + np.pi + delta_pha2,
-                np.angle(f.hx2) + delta_pha2,
-                np.angle(f.hy2) + delta_pha2,
-                np.angle(f.hz2) + delta_pha2,
-            ])
+            amps2 = (
+                np.array([abs(f.ex2), abs(f.ey2), abs(f.hx2), abs(f.hy2), abs(f.hz2)])
+                * self.schema.source_scale
+            )
+            phas2 = np.array(
+                [
+                    np.angle(f.ex2) + np.pi + delta_pha2,
+                    np.angle(f.ey2) + np.pi + delta_pha2,
+                    np.angle(f.hx2) + delta_pha2,
+                    np.angle(f.hy2) + delta_pha2,
+                    np.angle(f.hz2) + delta_pha2,
+                ]
+            )
 
             if self.method == SyntheticMethod.FIX:
-                ts1, ts2 = self._fix_segment(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._fix_segment(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
             elif self.method == SyntheticMethod.FIXED_AVG:
-                ts1, ts2 = self._fixed_avg_segment(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._fixed_avg_segment(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
             elif self.method == SyntheticMethod.FIXED_AVG_WINDOWED:
-                ts1, ts2 = self._fixed_avg_windowed(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._fixed_avg_windowed(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
             elif self.method == SyntheticMethod.RANDOM_SEG:
-                ts1, ts2 = self._random_segment(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._random_segment(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
             elif self.method == SyntheticMethod.RANDOM_SEG_WINDOWED:
-                ts1, ts2 = self._random_windowed(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._random_windowed(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
             else:
-                ts1, ts2 = self._random_partial(amps1, phas1, amps2, phas2, f.freq, n_samples, rng)
+                ts1, ts2 = self._random_partial(
+                    amps1, phas1, amps2, phas2, f.freq, n_samples, rng
+                )
 
             ex += ts1[0] + ts2[0]
             ey += ts1[1] + ts2[1]
@@ -192,14 +235,22 @@ class SyntheticTimeSeries:
 
     def _fix_segment(self, amps1, phas1, amps2, phas2, freq, n, rng):
         """不分段"""
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        ex1 = np.zeros(n)
+        ey1 = np.zeros(n)
+        hx1 = np.zeros(n)
+        hy1 = np.zeros(n)
+        hz1 = np.zeros(n)
+        ex2 = np.zeros(n)
+        ey2 = np.zeros(n)
+        hx2 = np.zeros(n)
+        hy2 = np.zeros(n)
+        hz2 = np.zeros(n)
 
-        da1 = rng.random() * 2
+        da1 = rng.normal(
+            1, 1
+        )  # Gaussian N(1,1) for Source 1 (TM mode) - matches Delphi
         dp1 = rng.random() * 2 * np.pi
-        da2 = rng.random() * 2
+        da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
         dp2 = rng.random() * 2 * np.pi
 
         for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
@@ -212,204 +263,327 @@ class SyntheticTimeSeries:
         return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
 
     def _fixed_avg_segment(self, amps1, phas1, amps2, phas2, freq, n, rng):
-        """固定长度平均分段"""
-        per_count = max(int(self.schema.sample_rate / freq * self.schema.synthetic_periods), 10)
+        """固定长度平均分段+极化角混合"""
+        per_count = max(
+            int(self.schema.sample_rate / freq * self.schema.synthetic_periods), 10
+        )
         if per_count > n:
             per_count = n
 
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        # 混合输出数组
+        ex = np.zeros(n)
+        ey = np.zeros(n)
+        hx = np.zeros(n)
+        hy = np.zeros(n)
+        hz = np.zeros(n)
 
         s_count = n // per_count
 
         for k in range(s_count):
-            da1 = rng.random() * 2
+            # 每段极化角 - 控制TE/TM混合比例
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(per_count)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, per_count, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][k*per_count:(k+1)*per_count] = tmp
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, per_count, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][k*per_count:(k+1)*per_count] = tmp
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, per_count, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count : (k + 1) * per_count] = (
+                    tmp * tm_weight
+                )
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, per_count, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count : (k + 1) * per_count] += (
+                    tmp * te_weight
+                )
 
         left = n - per_count * s_count
         if left > 0:
             k = s_count
-            da1 = rng.random() * 2
+            # 每段极化角
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(left)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, left, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][k*per_count:] = tmp
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, left, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][k*per_count:] = tmp
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, left, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count :] = tmp * tm_weight
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, left, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count :] += tmp * te_weight
 
-        return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
+        return (ex, ey, hx, hy, hz), (np.zeros(n),) * 5
 
     def _fixed_avg_windowed(self, amps1, phas1, amps2, phas2, freq, n, rng):
-        """固定长度平均分段+窗函数"""
-        per_count = max(int(self.schema.sample_rate / freq * self.schema.synthetic_periods), 10)
+        """固定长度平均分段+窗函数+极化角混合"""
+        per_count = max(
+            int(self.schema.sample_rate / freq * self.schema.synthetic_periods), 10
+        )
         if per_count > n:
             per_count = n
 
         window = hanning_window(per_count)
 
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        # 混合输出数组
+        ex = np.zeros(n)
+        ey = np.zeros(n)
+        hx = np.zeros(n)
+        hy = np.zeros(n)
+        hz = np.zeros(n)
 
         s_count = n // per_count
-        da1 = dp1 = da2 = dp2 = 0.0
 
         for k in range(s_count):
-            da1 = rng.random() * 2
+            # 每段极化角 - 控制TE/TM混合比例
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(per_count)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, per_count, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][k*per_count:(k+1)*per_count] = tmp * window
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, per_count, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][k*per_count:(k+1)*per_count] = tmp * window
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, per_count, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count : (k + 1) * per_count] = (
+                    tmp * window * tm_weight
+                )
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, per_count, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count : (k + 1) * per_count] += (
+                    tmp * window * te_weight
+                )
 
         left = n - per_count * s_count
         if left > 0:
             k = s_count
+            # 每段极化角
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
+            dp1 = rng.random() * 2 * np.pi
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
+            dp2 = rng.random() * 2 * np.pi
+
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(left)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, left, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][k*per_count:] = tmp
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, left, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][k*per_count:] = tmp
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, left, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count :] = tmp * tm_weight
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, left, tmp
+                )
+                [ex, ey, hx, hy, hz][i][k * per_count :] += tmp * te_weight
 
-        return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
+        return (ex, ey, hx, hy, hz), (np.zeros(n),) * 5
 
     def _random_segment(self, amps1, phas1, amps2, phas2, freq, n, rng):
-        """随机长度分段"""
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        """随机长度分段+极化角混合"""
+        # 混合输出数组
+        ex = np.zeros(n)
+        ey = np.zeros(n)
+        hx = np.zeros(n)
+        hy = np.zeros(n)
+        hz = np.zeros(n)
 
         left = n
         while left > 0:
-            mean_len = int(self.schema.sample_rate / freq * self.schema.synthetic_periods)
+            mean_len = int(
+                self.schema.sample_rate / freq * self.schema.synthetic_periods
+            )
             seg_len = int(abs(rng.normal(mean_len, mean_len / 2)))
             seg_len = max(seg_len, 10)
             seg_len = min(seg_len, left)
 
-            da1 = rng.random() * 2
+            # 每段极化角 - 控制TE/TM混合比例
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             start = n - left
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(seg_len)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][start:start+seg_len] = tmp
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][start:start+seg_len] = tmp
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                [ex, ey, hx, hy, hz][i][start : start + seg_len] = tmp * tm_weight
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                [ex, ey, hx, hy, hz][i][start : start + seg_len] += tmp * te_weight
 
             left -= seg_len
 
-        return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
+        return (ex, ey, hx, hy, hz), (np.zeros(n),) * 5
 
     def _random_windowed(self, amps1, phas1, amps2, phas2, freq, n, rng):
-        """随机长度分段+窗函数"""
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        """随机长度分段+窗函数+极化角混合"""
+        # 混合输出数组
+        ex = np.zeros(n)
+        ey = np.zeros(n)
+        hx = np.zeros(n)
+        hy = np.zeros(n)
+        hz = np.zeros(n)
 
         left = n
         while left > 0:
-            mean_len = int(self.schema.sample_rate / freq * self.schema.synthetic_periods)
+            mean_len = int(
+                self.schema.sample_rate / freq * self.schema.synthetic_periods
+            )
             seg_len = int(abs(rng.normal(mean_len, mean_len / 2)))
             seg_len = max(seg_len, 10)
             seg_len = min(seg_len, left)
 
             window = hanning_window(seg_len)
 
-            da1 = rng.random() * 2
+            # 每段极化角 - 控制TE/TM混合比例
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             start = n - left
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(seg_len)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp)
-                [ex1, ey1, hx1, hy1, hz1][i][start:start+seg_len] = tmp * window
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp)
-                [ex2, ey2, hx2, hy2, hz2][i][start:start+seg_len] = tmp * window
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                [ex, ey, hx, hy, hz][i][start : start + seg_len] = (
+                    tmp * window * tm_weight
+                )
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                [ex, ey, hx, hy, hz][i][start : start + seg_len] += (
+                    tmp * window * te_weight
+                )
 
             left -= seg_len
 
-        return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
+        return (ex, ey, hx, hy, hz), (np.zeros(n),) * 5
 
     def _random_partial(self, amps1, phas1, amps2, phas2, freq, n, rng):
-        """随机长度分段+部分窗 (默认方法)"""
-        ex1 = np.zeros(n); ey1 = np.zeros(n); hx1 = np.zeros(n)
-        hy1 = np.zeros(n); hz1 = np.zeros(n)
-        ex2 = np.zeros(n); ey2 = np.zeros(n); hx2 = np.zeros(n)
-        hy2 = np.zeros(n); hz2 = np.zeros(n)
+        """随机长度分段+部分窗+极化角混合 (默认方法)
+
+        使用极化角控制每段内TE/TM模式的混合比例:
+        ex = ex_TM * cos(θ) + ex_TE * sin(θ)
+        极化角θ在每段随机变化,模拟自然源极化方向变化
+        """
+        # 混合输出数组 (单套数组,不是两套)
+        ex = np.zeros(n)
+        ey = np.zeros(n)
+        hx = np.zeros(n)
+        hy = np.zeros(n)
+        hz = np.zeros(n)
 
         wlen = max(int(self.schema.sample_rate / 2 / freq) * 2, 2)
         window = inv_hanning_window(wlen)
 
         left = n
         while left > 0:
-            mean_len = int(self.schema.sample_rate / freq * self.schema.synthetic_periods)
+            mean_len = int(
+                self.schema.sample_rate / freq * self.schema.synthetic_periods
+            )
             seg_len = int(abs(rng.normal(mean_len, mean_len / 2)))
             seg_len = max(seg_len, 10)
             seg_len = min(seg_len, left)
 
-            da1 = rng.random() * 2
+            # 每段生成新的极化角 - 控制TE/TM混合比例
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            da1 = rng.normal(1, 1)  # Gaussian N(1,1) for Source 1 (TM mode)
             dp1 = rng.random() * 2 * np.pi
-            da2 = rng.random() * 2
+            da2 = rng.random() * 2  # Uniform [0,2] for Source 2 (TE mode)
             dp2 = rng.random() * 2 * np.pi
 
             start = n - left
+            end = start + seg_len
 
             for i, (a1, p1, a2, p2) in enumerate(zip(amps1, phas1, amps2, phas2)):
                 tmp = np.zeros(seg_len)
-                freq_to_time(a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp)
+
+                # 生成TM模式并应用极化角权重
+                freq_to_time(
+                    a1 * da1, p1 + dp1, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                tm_signal = tmp * tm_weight
 
                 if seg_len > wlen * 2:
-                    end = start + seg_len
-                    [ex1, ey1, hx1, hy1, hz1][i][start:start+wlen] += tmp[:wlen] * window
-                    [ex1, ey1, hx1, hy1, hz1][i][end-wlen:end] += tmp[-wlen:] * window
-                    [ex1, ey1, hx1, hy1, hz1][i][start+wlen:end-wlen] += tmp[wlen:-wlen]
+                    # 应用部分窗到TM信号
+                    [ex, ey, hx, hy, hz][i][start : start + wlen] += (
+                        tm_signal[:wlen] * window
+                    )
+                    [ex, ey, hx, hy, hz][i][end - wlen : end] += (
+                        tm_signal[-wlen:] * window
+                    )
+                    [ex, ey, hx, hy, hz][i][start + wlen : end - wlen] += tm_signal[
+                        wlen:-wlen
+                    ]
                 else:
-                    [ex1, ey1, hx1, hy1, hz1][i][start:start+seg_len] += tmp
+                    [ex, ey, hx, hy, hz][i][start : start + seg_len] += tm_signal
 
-                freq_to_time(a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp)
+                # 生成TE模式并应用极化角权重
+                freq_to_time(
+                    a2 * da2, p2 + dp2, freq, self.schema.sample_rate, seg_len, tmp
+                )
+                te_signal = tmp * te_weight
 
                 if seg_len > wlen * 2:
-                    end = start + seg_len
-                    [ex2, ey2, hx2, hy2, hz2][i][start:start+wlen] += tmp[:wlen] * window
-                    [ex2, ey2, hx2, hy2, hz2][i][end-wlen:end] += tmp[-wlen:] * window
-                    [ex2, ey2, hx2, hy2, hz2][i][start+wlen:end-wlen] += tmp[wlen:-wlen]
+                    # 应用部分窗到TE信号
+                    [ex, ey, hx, hy, hz][i][start : start + wlen] += (
+                        te_signal[:wlen] * window
+                    )
+                    [ex, ey, hx, hy, hz][i][end - wlen : end] += (
+                        te_signal[-wlen:] * window
+                    )
+                    [ex, ey, hx, hy, hz][i][start + wlen : end - wlen] += te_signal[
+                        wlen:-wlen
+                    ]
                 else:
-                    [ex2, ey2, hx2, hy2, hz2][i][start:start+seg_len] += tmp
+                    [ex, ey, hx, hy, hz][i][start : start + seg_len] += te_signal
 
             left -= seg_len
 
-        return (ex1, ey1, hx1, hy1, hz1), (ex2, ey2, hx2, hy2, hz2)
+        # 返回混合结果 (ts1=混合, ts2=空数组保持接口兼容)
+        return (ex, ey, hx, hy, hz), (np.zeros(n),) * 5
 
 
 def create_test_site() -> ForwardSite:
@@ -418,15 +592,23 @@ def create_test_site() -> ForwardSite:
     freqs = np.logspace(-2, 3, 20)
 
     for f in freqs:
-        fields.append(EMFields(
-            freq=f,
-            ex1=complex(1.0, 0.1), ey1=complex(0.8, -0.1),
-            hx1=complex(0.01, 0), hy1=complex(0.01, 0), hz1=complex(0, 0),
-            ex2=complex(0.9, -0.1), ey2=complex(-0.8, 0.1),
-            hx2=complex(0.01, 0), hy2=complex(-0.01, 0), hz2=complex(0, 0),
-        ))
+        fields.append(
+            EMFields(
+                freq=f,
+                ex1=complex(1.0, 0.1),
+                ey1=complex(0.8, -0.1),
+                hx1=complex(0.01, 0),
+                hy1=complex(0.01, 0),
+                hz1=complex(0, 0),
+                ex2=complex(0.9, -0.1),
+                ey2=complex(-0.8, 0.1),
+                hx2=complex(0.01, 0),
+                hy2=complex(-0.01, 0),
+                hz2=complex(0, 0),
+            )
+        )
 
-    return ForwardSite(name='Test', x=0, y=0, fields=fields)
+    return ForwardSite(name="Test", x=0, y=0, fields=fields)
 
 
 def load_modem_file(filepath: str) -> List[ForwardSite]:
@@ -443,25 +625,25 @@ def load_modem_file(filepath: str) -> List[ForwardSite]:
     - Ex := val * (4E2 * π) [mv/Km] -> [V/m]
     - Hx := val * 1E9 [nT] -> [A/m]
     """
-    with open(filepath, 'r', errors='ignore') as f:
+    with open(filepath, "r", errors="ignore") as f:
         content = f.read()
 
     sites = []
-    blocks = content.split('>')
+    blocks = content.split(">")
 
     for block in blocks:
         block = block.strip()
         if not block:
             continue
 
-        lines = block.split('\n')
+        lines = block.split("\n")
         header = lines[0].strip()
 
-        if 'Full_Impedance' in header:
+        if "Full_Impedance" in header:
             sites = _parse_impedance_block(lines[1:])
-        elif 'Full_Vertical_Components' in header:
+        elif "Full_Vertical_Components" in header:
             sites = _parse_tipper_block(lines[1:], sites)
-        elif 'EM_Fields' in header:
+        elif "EM_Fields" in header:
             sites = _parse_emfields_block(lines[1:], sites)
 
     for site in sites:
@@ -497,7 +679,7 @@ def _parse_impedance_block(lines: List[str]) -> List[ForwardSite]:
         if idx >= len(lines):
             break
 
-        site = ForwardSite(name=f'Site{s}')
+        site = ForwardSite(name=f"Site{s}")
 
         site_fields = []
         for k in range(fcount):
@@ -533,7 +715,9 @@ def _parse_impedance_block(lines: List[str]) -> List[ForwardSite]:
     return sites
 
 
-def _parse_tipper_block(lines: List[str], sites: List[ForwardSite]) -> List[ForwardSite]:
+def _parse_tipper_block(
+    lines: List[str], sites: List[ForwardSite]
+) -> List[ForwardSite]:
     """解析Tipper数据块"""
     if not sites:
         return sites
@@ -575,7 +759,9 @@ def _parse_tipper_block(lines: List[str], sites: List[ForwardSite]) -> List[Forw
     return sites
 
 
-def _parse_emfields_block(lines: List[str], sites: List[ForwardSite]) -> List[ForwardSite]:
+def _parse_emfields_block(
+    lines: List[str], sites: List[ForwardSite]
+) -> List[ForwardSite]:
     """解析EM场数据块"""
     if not sites:
         return sites

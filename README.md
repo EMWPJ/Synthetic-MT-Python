@@ -52,16 +52,101 @@ print(f"Hx range: [{hx.min():.6f}, {hx.max():.6f}] A/m")
 ```
 Synthetic-MT-Python/
 ├── src/
-│   ├── __init__.py          # Package exports
-│   ├── synthetic_mt.py      # Core synthesis algorithm
-│   ├── phoenix.py           # Phoenix TSn/TBL file I/O
-│   ├── cli.py               # Command-line interface
-│   └── gui.py               # PySide6 GUI
+│   ├── synthetic_mt/          # Core synthesis library (modular structure)
+│   │   ├── domain/          # Domain entities & services
+│   │   ├── infrastructure/  # I/O handlers
+│   │   ├── application/     # Use cases
+│   │   └── presentation/    # GUI
+│   └── ...
 ├── examples/
-│   └── test_synthetic.py    # Test examples
-├── output/                   # Generated output files
+│   ├── test_synthetic.py    # Basic examples
+│   └── mt_workflow/         # 1D MT workflow (后端与界面分离架构)
+│       ├── backend/         # 后台算法核心
+│       │   ├── core.py      # 算法实现 (Model, Forward, Processor)
+│       │   ├── api.py       # API接口
+│       │   └── verify_all.py # 模块验证
+│       ├── gui_simple.py    # 简化版GUI (调用backend.api)
+│       ├── gui.py          # 旧版GUI
+│       └── ...
+├── docs/                    # Documentation
 └── README.md
 ```
+
+## 1D MT Workflow (模块化架构)
+
+完整的1D大地电磁正演合成与处理工作流，采用**后台算法与界面分离**架构。
+
+### 架构
+
+```
+GUI (gui_simple.py)  →  API层 (backend/api.py)  →  算法核心 (backend/core.py)
+     │                         │                           │
+  用户界面                    接口                       MT1DModel
+  图表显示                  MTWorkflowAPI              MT1DForward
+  事件处理                  单例模式                   TimeSeriesSynthesizer
+                                                     TimeSeriesProcessor
+                                                     Model1DValidator
+```
+
+### 两种合成方法
+
+#### 1. 确定性合成 (`synthesize_time_series_deterministic`)
+- 保持精确E-H相位关系: `Ex = Zxy * Hy`
+- 用于算法验证
+- 处理结果与正演精确匹配 (<1%误差)
+
+#### 2. 随机合成 (`synthesize_time_series_random`)
+- 实现论文的 `RANDOM_SEG_PARTIAL` 算法
+- 每分段随机振幅 (`RandG(1,1)`) 和相位 (`Random * 2π`)
+- 模拟自然源变化
+- 处理结果有较大误差（预期行为）
+
+### 快速开始
+
+```python
+# 使用API进行完整工作流
+from examples.mt_workflow.backend.api import get_api
+
+api = get_api()
+
+# 1. 创建模型
+api.get_preset_model("uniform_100")
+
+# 2. 正演计算
+forward_result = api.run_forward()
+
+# 3. 合成时间序列
+ts_result = api.synthesize_time_series("TS3", duration=10)
+
+# 4. 处理时间序列
+processed = api.process_time_series()
+
+# 5. 对比结果
+comparator = api.compare_results()
+```
+
+### 后台验证
+
+```bash
+cd examples/mt_workflow
+python backend/verify_all.py
+```
+
+### 启动GUI
+
+```bash
+cd examples/mt_workflow
+python gui_simple.py
+```
+
+### 核心模块
+
+| 模块 | 功能 |
+|------|------|
+| `backend/core.py` | 算法核心: MT1DModel, MT1DForward, TimeSeriesSynthesizer, TimeSeriesProcessor |
+| `backend/api.py` | 统一API: MTWorkflowAPI单例, get_api()访问 |
+| `backend/verify_all.py` | 后台验证脚本 |
+| `gui_simple.py` | 简化版GUI (纯前端, 调用API) |
 
 ## Core Features
 
@@ -185,12 +270,57 @@ The synthesis algorithm is based on:
 - `ForwardSite`: Forward modeling site data
 - `EMFields`: Electromagnetic field data at one frequency
 
+### 1D MT Workflow API
+
+```python
+from examples.mt_workflow.backend.api import get_api
+
+api = get_api()
+api.get_preset_model("uniform_100")
+forward_result = api.run_forward()
+ts_result = api.synthesize_time_series_deterministic("TS3", duration=60)
+processed = api.process_time_series()
+comparator = api.compare_results()
+```
+
 ### I/O Functions
 
 - `load_modem_file()`: Load ModEM forward results
 - `save_gmt_timeseries()`: Save in GMT-compatible format
 - `save_csv_timeseries()`: Save in CSV format
 - `save_numpy_timeseries()`: Save in NumPy format
+
+## Full Pipeline Test
+
+Run the complete 1D MT workflow test:
+
+```bash
+cd examples/mt_workflow
+python backend/test_full_pipeline.py
+```
+
+This tests:
+1. **Forward Modeling**: 1D model → impedance
+2. **Deterministic Synthesis**: Impedance → time series (preserves E-H phase)
+3. **FFT Processing**: Time series → estimated impedance
+4. **Comparison**: Forward vs Processed results
+
+**Test Results** (Deterministic Synthesis):
+| Model | Max rho_a Error | Mean rho_a Error | Max Phase Error | Status |
+|-------|---------------|-----------------|-----------------|--------|
+| uniform_100 | 0.93% | 0.30% | 0.39° | PASS |
+| uniform_1000 | 0.93% | 0.30% | 0.39° | PASS |
+| two_layer_hl | 1.14% | 0.35% | 0.48° | PASS |
+| two_layer_ll | 0.32% | 0.12% | 0.11° | PASS |
+| three_layer_hll | 0.60% | 0.24% | 0.21° | PASS |
+
+**Note**: Random synthesis (RANDOM_SEG_PARTIAL) produces larger errors (2-100%) due to intentional random amplitude/phase perturbations, which is the expected behavior per the paper.
+
+**Generated Artifacts** (in `docs/plots/`):
+- `<model>_comparison.png` - Per-model comparison
+- `all_models_summary.png` - Summary plot
+- `error_summary.png` - Error analysis
+- `test_report.md` - Test report
 
 ## Citation
 
@@ -264,3 +394,21 @@ ex, ey, hx, hy, hz = synth.generate(t1, t2, site, seed=42)
 - GMT/CSV/NumPy输出格式
 - 自然磁场强度计算
 - PySide6图形界面
+
+## 1D MT工作流 (模块化)
+
+完整的1D大地电磁正演合成与处理工作流，采用后台与界面分离架构：
+
+- **后台**: `examples/mt_workflow/backend/` - 算法核心独立验证
+- **前端**: `examples/mt_workflow/gui_simple.py` - PySide6 GUI
+- **验证**: `python backend/verify_all.py` - 所有模块正确性验证
+
+### 预设模型
+
+| 模型名 | 描述 |
+|--------|------|
+| `uniform_100` | 均匀半空间 100 Ω·m |
+| `uniform_1000` | 均匀半空间 1000 Ω·m |
+| `two_layer_hl` | 两层高阻-低阻 (1000→10 Ω·m) |
+| `two_layer_ll` | 两层低阻-高阻 (10→1000 Ω·m) |
+| `three_layer_hll` | 三层高-低-低 (1000→10→100 Ω·m) |
