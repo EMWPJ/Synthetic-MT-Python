@@ -373,11 +373,32 @@ class TimeSeriesProcessor:
             C_HH = np.array([[HxHx[i], HxHy[i]], [HyHx[i], HyHy[i]]])
             C_EH = np.array([[ExHx[i], ExHy[i]], [EyHx[i], EyHy[i]]])
 
+            # 计算Hx-Hy相干性，用于判断是否使用简单比值法
+            # coh_HxHy = |HxHy| / sqrt(HxHx * HyHy)
+            # 当相干性接近1.0时，C_HH矩阵病态，直接求逆会失败
+            hxhy_mag = np.abs(HxHy[i])
+            hxhx_mag = np.abs(HxHx[i])
+            hyhy_mag = np.abs(HyHy[i])
+            coh_HxHy = hxhy_mag / np.sqrt(hxhx_mag * hyhy_mag + eps)
+
             # 使用正则化稳定矩阵求逆: C_HH_reg = C_HH + reg*I
             C_HH_reg = C_HH + reg * np.eye(2)
             det = C_HH_reg[0, 0] * C_HH_reg[1, 1] - C_HH_reg[0, 1] * C_HH_reg[1, 0]
 
-            if np.abs(det) > eps:
+            # 当Hx-Hy高度相关(相干性>0.95)时，使用简单比值法避免病态矩阵求逆
+            # 这发生在TM/TE模式混合时，属于物理正常情况
+            if coh_HxHy > 0.95 or np.abs(det) < eps:
+                # 使用简单比值法: Zxy = ExHy/HyHy
+                # 这是1D模型的正确方法，因为Ex和Hy直接通过Zxy关联
+                # 而Hx与Ex无直接关系（除非Zxx≠0）
+                Zxy[i] = ExHy[i] / (HyHy[i] + eps)
+                Zyx[i] = EyHx[i] / (HxHx[i] + eps)
+                # 1D约束: Zxx ≈ 0, Zyy ≈ 0, Zyx = -Zxy
+                Zxx[i] = 0
+                Zyy[i] = 0
+                # 强制满足反对称约束
+                Zyx[i] = -Zxy[i]
+            else:
                 # C_HH^(-1) = [[d, -b], [-c, a]] / det where C_HH = [[a, b], [c, d]]
                 C_HH_inv = (
                     np.array(
@@ -411,13 +432,6 @@ class TimeSeriesProcessor:
                     + np.abs(EyHy[i]) ** 2
                 )
                 coherence[i] = (C_EH_fro**2) / (C_EE_trace * C_HH_trace + eps)
-            else:
-                # C_HH奇异，使用备选方法
-                # 对于1D: Zxy = ExHy/HyHy (简单比值法)
-                Zxy[i] = ExHy[i] / (HyHy[i] + eps)
-                Zyx[i] = -Zxy[i]  # 1D约束
-                Zxx[i] = 0
-                Zyy[i] = 0
 
         # 插值到目标周期
         target_freqs = 1.0 / periods
@@ -686,7 +700,7 @@ class RandomSegmentTimeSeriesSynthesizer:
     def __init__(
         self,
         sample_rate: float = 2400,
-        synthetic_periods: float = 8.0,
+        synthetic_periods: float = 200.0,
         source_scale: float = 1.0,
     ):
         """
@@ -756,9 +770,11 @@ class RandomSegmentTimeSeriesSynthesizer:
             hy_tm_amp = abs(f.hy1) * self.source_scale
             hz_tm_amp = abs(f.hz1) * self.source_scale
 
-            # TM模式 (Source 1) 相位 - Ex/Ey 添加 +π 相位移 (遵循MT相位约定)
-            ex_tm_phase = np.angle(f.ex1) + np.pi
-            ey_tm_phase = np.angle(f.ey1) + np.pi
+            # TM模式 (Source 1) 相位 - 直接使用fields中的相位
+            # 注意: f.ex1 = zxy * hy, f.ey1 = zyx * hx 已经包含了正确的阻抗相位关系
+            # 不需要额外添加 +pi
+            ex_tm_phase = np.angle(f.ex1)
+            ey_tm_phase = np.angle(f.ey1)
             hx_tm_phase = np.angle(f.hx1)
             hy_tm_phase = np.angle(f.hy1)
             hz_tm_phase = np.angle(f.hz1)
@@ -777,9 +793,11 @@ class RandomSegmentTimeSeriesSynthesizer:
             hy_te_amp = abs(f.hy2) * self.source_scale
             hz_te_amp = abs(f.hz2) * self.source_scale
 
-            # TE模式 (Source 2) 相位
-            ex_te_phase = np.angle(f.ex2) + np.pi
-            ey_te_phase = np.angle(f.ey2) + np.pi
+            # TE模式 (Source 2) 相位 - 直接使用fields中的相位
+            # 注意: f.ex2 = zxy * hy2, f.ey2 = zyx * hx2 已经包含了正确的阻抗相位关系
+            # 不需要额外添加 +pi
+            ex_te_phase = np.angle(f.ex2)
+            ey_te_phase = np.angle(f.ey2)
             hx_te_phase = np.angle(f.hx2)
             hy_te_phase = np.angle(f.hy2)
             hz_te_phase = np.angle(f.hz2)

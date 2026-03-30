@@ -73,8 +73,8 @@ def test_model(model_name: str, api: MTWorkflowAPI, band: str = "TS3") -> dict:
     )
     forward_result = api.run_forward(forward_periods)
 
-    # 2. 确定性合成
-    ts_result = api.synthesize_time_series_deterministic(band, duration=60.0)
+    # 2. 合成时间序列 (使用随机分段合成)
+    ts_result = api.synthesize_time_series_random(band, duration=60.0)
 
     # 3. 处理时间序列
     processed_result = api.process_time_series(forward_periods)

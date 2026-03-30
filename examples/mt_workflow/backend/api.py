@@ -190,7 +190,7 @@ class MTWorkflowAPI:
         band: str = "TS3",
         duration: float = 10.0,
         seed: Optional[int] = None,
-        synthetic_periods: float = 8.0,
+        synthetic_periods: float = 200.0,
         start_time: Optional[datetime] = None,
     ) -> Dict:
         """
