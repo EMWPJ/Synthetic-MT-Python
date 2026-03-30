@@ -42,6 +42,7 @@ env/
 Thumbs.db
 
 # Output
+output/
 *.png
 *.pdf
 *.npy
