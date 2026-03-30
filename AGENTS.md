@@ -76,24 +76,21 @@ python gui_simple.py
 
 ### Synthesis Methods
 
-Three synthesis methods are implemented:
+One synthesis method is implemented:
 
-#### 1. Deterministic Synthesis (`synthesize_time_series_deterministic`)
-- Preserves exact E-H phase relationship: `Ex = Zxy * Hy`
-- Used for algorithm verification
-- Processing results match forward exactly (<2% error)
-
-#### 2. Random Synthesis (`synthesize_time_series_random`)
+#### Random Synthesis (`synthesize_time_series_random`)
 - Implements paper's `RANDOM_SEG_PARTIAL` algorithm
-- Per-segment random amplitude (`RandG(1,1)`) and phase (`Random * 2π`)
-- Per-segment polarization angle variation: `θ ∈ [0, 2π)`
+- Per-segment random amplitude (TM: Gaussian N(1,1), TE: Uniform [0,2])
+- Per-segment random phase: `θ ∈ [0, 2π)`
+- Per-segment polarization angle variation for TE/TM mode mixing
+- Random segment length (Gaussian distribution, important for natural variation)
+- Cosine boundary window for segment continuity
 - TE/TM mode mixing: `ex = ex_TM * cos(θ) + ex_TE * sin(θ)`
 - Simulates natural source polarization ellipse rotation
 - Processing results have larger errors (expected behavior)
 
-#### 3. Synthesis Classes (in `core.py`)
-- `DeterministicTimeSeriesSynthesizer` - Deterministic synthesis with fixed E-H phase
-- `RandomSegmentTimeSeriesSynthesizer` - Random segment synthesis with polarization variation
+#### Synthesis Classes (in `core.py`)
+- `RandomSegmentTimeSeriesSynthesizer` - Optimized random segment synthesis with all features above
 - `TimeSeriesSynthesizer` - Wrapper using `synthetic_mt` library
 
 ### Preset Models
@@ -164,7 +161,7 @@ verify_api_workflow:   PASS - Full workflow
 | two_layer_ll | 0.32% | 0.12% | 0.11° | 0.03° | PASS |
 | three_layer_hll | 0.60% | 0.24% | 0.21° | 0.06° | PASS |
 
-**Note**: Errors are due to FFT numerical precision. The deterministic synthesis preserves the E-H phase relationship, enabling accurate impedance recovery.
+**Note**: Errors are due to FFT numerical precision. The random synthesis intentionally perturbs amplitude/phase per segment, simulating natural source variation. Larger errors (2-100%) are expected for random synthesis per the paper.
 
 ### Generated Test Artifacts
 

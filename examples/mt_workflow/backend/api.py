@@ -167,56 +167,6 @@ class MTWorkflowAPI:
 
         return self.current_time_series
 
-    def synthesize_time_series_deterministic(
-        self, band: str = "TS3", duration: float = 10.0
-    ) -> Dict:
-        """
-        确定性合成时间序列 - 处理后能精确恢复正演阻抗
-
-        使用DeterministicTimeSeriesSynthesizer，保持E-H相位关系
-        """
-        from .core import DeterministicTimeSeriesSynthesizer
-
-        if self.forward_calc is None:
-            raise RuntimeError("No model created. Run forward first.")
-
-        config = TS_CONFIGS.get(band)
-        if config is None:
-            raise ValueError(f"Unknown band: {band}")
-
-        # 计算用于合成的频段周期
-        band_periods = np.logspace(
-            np.log10(config.period_min), np.log10(config.period_max), 16
-        )
-
-        # 计算fields (包含阻抗)
-        fields = self.forward_calc.calculate_fields(band_periods)
-
-        # 确定性合成
-        synth = DeterministicTimeSeriesSynthesizer(sample_rate=config.sample_rate)
-        ts_result = synth.generate_from_fields(fields, duration=duration)
-
-        t1 = datetime(2023, 1, 1, 0, 0, 0)
-        t2 = t1 + timedelta(seconds=int(duration))
-
-        self.current_time_series = {
-            "band": band,
-            "config": config,
-            "ex": ts_result["ex"],
-            "ey": ts_result["ey"],
-            "hx": ts_result["hx"],
-            "hy": ts_result["hy"],
-            "hz": ts_result["hz"],
-            "start_time": t1,
-            "end_time": t2,
-            "duration": duration,
-            "n_samples": ts_result["n_samples"],
-            "sample_rate": config.sample_rate,
-            "frequencies": ts_result["frequencies"],
-        }
-
-        return self.current_time_series
-
     def synthesize_time_series_random(
         self,
         band: str = "TS3",

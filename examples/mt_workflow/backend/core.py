@@ -658,181 +658,29 @@ def get_default_processing_periods() -> np.ndarray:
 # ============================================================================
 
 
-class DeterministicTimeSeriesSynthesizer:
-    """
-    确定性MT时间序列合成器
-
-    生成保持E-H相位关系的时间序列，使得处理后能精确恢复正演阻抗。
-
-    原理:
-    - Hy(t) = H_ref * cos(omega * t)
-    - Ex(t) = Re{Zxy * Hy(t)} = |Zxy| * H_ref * cos(omega * t + arg(Zxy))
-
-    这样 ExHy 互谱 = Zxy * |Hy|^2, HyHy = |Hy|^2
-    因此 Zxy = ExHy / HyHy 精确成立
-    """
-
-    def __init__(self, sample_rate: float = 2400):
-        self.sample_rate = sample_rate
-
-    def generate_from_impedance(
-        self,
-        frequencies: np.ndarray,
-        zxy: np.ndarray,
-        zyx: np.ndarray,
-        duration: float = 10.0,
-        h_ref: float = 1e-3,  # 参考磁场振幅 (A/m)
-    ) -> Dict:
-        """
-        从阻抗值生成确定性时间序列
-
-        Args:
-            frequencies: 频率数组 (Hz)
-            zxy: 阻抗 Zxy (complex)
-            zyx: 阻抗 Zyx (complex)
-            duration: 时长 (秒)
-            h_ref: 参考磁场振幅 (A/m)
-
-        Returns:
-            包含时间序列的字典
-        """
-        n_samples = int(self.sample_rate * duration)
-        t = np.arange(n_samples) / self.sample_rate
-
-        # 初始化输出
-        ex = np.zeros(n_samples)
-        ey = np.zeros(n_samples)
-        hx = np.zeros(n_samples)
-        hy = np.zeros(n_samples)
-        hz = np.zeros(n_samples)
-
-        # 对每个频率生成正弦波
-        for i, f in enumerate(frequencies):
-            omega = 2 * np.pi * f
-
-            # Hy: 参考磁场 (余弦)
-            hy_component = h_ref * np.cos(omega * t)
-            hy += hy_component
-
-            # Ex = Re{Zxy * Hy} = |Zxy| * H_ref * cos(omega*t + arg(Zxy))
-            zxy_i = zxy[i]
-            amplitude_ex = np.abs(zxy_i) * h_ref
-            phase_ex = np.angle(zxy_i)  # zxy的相位
-            ex += amplitude_ex * np.cos(omega * t + phase_ex)
-
-            # Hx: 很小 (保持与正演一致)
-            hx_small = h_ref * 0.01
-            hx += hx_small * np.cos(omega * t)
-
-            # Ey = Re{Zyx * Hx} ≈ 很小
-            zyx_i = zyx[i]
-            amplitude_ey = np.abs(zyx_i) * hx_small
-            phase_ey = np.angle(zyx_i)
-            ey += amplitude_ey * np.cos(omega * t + phase_ey)
-
-        return {
-            "ex": ex,
-            "ey": ey,
-            "hx": hx,
-            "hy": hy,
-            "hz": hz,
-            "sample_rate": self.sample_rate,
-            "duration": duration,
-            "n_samples": n_samples,
-            "frequencies": frequencies,
-            "zxy": zxy,
-            "zyx": zyx,
-        }
-
-    def generate_from_fields(
-        self,
-        fields: List,
-        duration: float = 10.0,
-    ) -> Dict:
-        """
-        从EMFields列表生成确定性时间序列
-
-        Args:
-            fields: EMFields列表 (来自MT1DForward.calculate_fields)
-            duration: 时长 (秒)
-
-        Returns:
-            包含时间序列的字典
-        """
-        frequencies = np.array([f.freq for f in fields])
-        zxy = np.array([f.zxy for f in fields])
-        zyx = np.array([f.zyx for f in fields])
-
-        # 使用TM模式 (mode 1) 的场分量
-        # hx1很小, hy1是主力, ex1 = zxy * hy1
-        h_ref = 1e-3  # A/m
-
-        n_samples = int(self.sample_rate * duration)
-        t = np.arange(n_samples) / self.sample_rate
-
-        ex = np.zeros(n_samples)
-        ey = np.zeros(n_samples)
-        hx = np.zeros(n_samples)
-        hy = np.zeros(n_samples)
-        hz = np.zeros(n_samples)
-
-        for i, f in enumerate(fields):
-            omega = 2 * np.pi * f.freq
-
-            # TM模式: Hy主力, Hx很小
-            hy1 = np.abs(f.hy1) if f.hy1 != 0 else h_ref
-            hx1 = np.abs(f.hx1) if f.hx1 != 0 else h_ref * 0.01
-
-            # Hy(t) = |Hy1| * cos(omega*t)
-            hy += hy1 * np.cos(omega * t)
-
-            # Ex(t) = Re{Zxy * Hy(t)} = |Zxy| * |Hy1| * cos(omega*t + arg(Zxy))
-            amplitude_ex = np.abs(f.zxy) * hy1
-            phase_zxy = np.angle(f.zxy)
-            ex += amplitude_ex * np.cos(omega * t + phase_zxy)
-
-            # Hx(t)
-            hx += hx1 * np.cos(omega * t)
-
-            # Ey(t) = Re{Zyx * Hx(t)}
-            amplitude_ey = np.abs(f.zyx) * hx1
-            phase_zyx = np.angle(f.zyx)
-            ey += amplitude_ey * np.cos(omega * t + phase_zyx)
-
-        return {
-            "ex": ex,
-            "ey": ey,
-            "hx": hx,
-            "hy": hy,
-            "hz": hz,
-            "sample_rate": self.sample_rate,
-            "duration": duration,
-            "n_samples": n_samples,
-            "frequencies": frequencies,
-        }
-
-
 # ============================================================================
-# RANDOM_SEG_PARTIAL 时间序列合成器 (遵循Delphi算法)
+# 随机分段MT时间序列合成器 (优化版)
 # ============================================================================
 
 
 class RandomSegmentTimeSeriesSynthesizer:
     """
-    基于论文 Wang et al. (2023) 的 RANDOM_SEG_PARTIAL 算法
-    完全遵循 Delphi SyntheticTimeSeries.pas 中的 RandomSegmentLengthPartiallyWindowedSyntheticSeries 实现
+    优化的随机分段MT时间序列合成器
 
-    该算法从正演结果生成MT时间序列，包含以下关键步骤：
-    1. 两个正交极化 (TM和TE模式)
-    2. 每段随机幅度 (高斯/均匀分布) 和随机相位 (均匀分布)
-    3. 部分Hanning窗 - 仅在段边缘应用窗函数
+    基于论文 Wang et al. (2023) 的 RANDOM_SEG_PARTIAL 算法实现，包含以下特性：
 
-    关键差异 (vs 旧版本):
-    - 添加 +π 相位移到 Ex/Ey 相位 (遵循Delphi)
-    - 添加 deltaPha 时间相关相位偏移 (45° 极化间差异)
-    - 随机幅度/相位在每段内生成 (Delphi算法)
+    1. 随机振幅: TM模式用高斯N(1,1), TE模式用均匀[0,2]
+    2. 随机相位: 每段均匀随机[0, 2π)
+    3. 随机分段长度: 高斯分布，均值为synthetic_periods个周期
+    4. 边界余弦窗: 每段边界应用余弦渐变窗保证连续性
+    5. 每段极化角: θ ∈ [0, 2π)，控制TE/TM混合比例
+    6. 单频分段拼接 + 多频叠加
 
-    参考: Delphi SyntheticTimeSeries.pas 中的 RandomSegmentLengthPartiallyWindowedSyntheticSeries
+    原理:
+    - 每个频点独立生成分段时间序列
+    - 每段随机极化角: ex = ex_TM * cos(θ) + ex_TE * sin(θ)
+    - 边界窗保证相邻段之间平滑过渡
+    - 最后所有频点时域信号叠加
     """
 
     def __init__(
@@ -873,7 +721,6 @@ class RandomSegmentTimeSeriesSynthesizer:
             包含时间序列的字典: {"ex": array, "ey": array, "hx": array, "hy": array, "hz": array, ...}
         """
         rng = np.random.default_rng(seed)
-
         n_samples = int(self.sample_rate * duration)
 
         # 初始化输出数组
@@ -882,19 +729,6 @@ class RandomSegmentTimeSeriesSynthesizer:
         hx = np.zeros(n_samples)
         hy = np.zeros(n_samples)
         hz = np.zeros(n_samples)
-
-        # 初始化两个极化模式的累加数组
-        ex1d1 = np.zeros(n_samples)
-        ey1d1 = np.zeros(n_samples)
-        hx1d1 = np.zeros(n_samples)
-        hy1d1 = np.zeros(n_samples)
-        hz1d1 = np.zeros(n_samples)
-
-        ex1d2 = np.zeros(n_samples)
-        ey1d2 = np.zeros(n_samples)
-        hx1d2 = np.zeros(n_samples)
-        hy1d2 = np.zeros(n_samples)
-        hz1d2 = np.zeros(n_samples)
 
         # 时间偏移 (用于 deltaPha 计算)
         deltatime = start_time  # 秒
@@ -905,30 +739,25 @@ class RandomSegmentTimeSeriesSynthesizer:
                 continue
 
             # 计算 deltaPha (时间相关相位偏移)
-            # Delphi: deltaPha1 := deltatime / (2.0 * System.Pi);
-            #         deltaPha1 := deltaPha1 - (Trunc(deltaPha1 * 180 / System.Pi) div 360) * 2 * System.Pi;
-            #         deltaPha2 := deltaPha1 + System.Pi / 4;
             deltaPha1 = deltatime / (2.0 * np.pi)
             deltaPha1 = deltaPha1 - (int(deltaPha1 * 180 / np.pi) // 360) * 2 * np.pi
             deltaPha2 = deltaPha1 + np.pi / 4  # 45° offset between polarizations
 
-            # 幅度 (遵循Delphi)
-            # Delphi: examps1 := Ex1[I].Module * AllScale;
+            # 幅度
             examps1 = abs(f.ex1) * self.source_scale
             eyamps1 = abs(f.ey1) * self.source_scale
             hxamps1 = abs(f.hx1) * self.source_scale
             hyamps1 = abs(f.hy1) * self.source_scale
             hzamps1 = abs(f.hz1) * self.source_scale
 
-            # 相位 - 遵循Delphi: Ex/Ey 添加 +π 相位移
-            # Delphi: exphss1 := Ex1[I].Phase + System.Pi;
+            # 相位 - Ex/Ey 添加 +π 相位移
             exphss1 = np.angle(f.ex1) + np.pi
             eyphss1 = np.angle(f.ey1) + np.pi
             hxphss1 = np.angle(f.hx1)
             hyphss1 = np.angle(f.hy1)
             hzphss1 = np.angle(f.hz1)
 
-            # 应用 deltaPha 相位偏移 (Delphi算法)
+            # 应用 deltaPha 相位偏移
             exphss1 = exphss1 + deltaPha1
             eyphss1 = eyphss1 + deltaPha1
             hxphss1 = hxphss1 + deltaPha1
@@ -954,137 +783,41 @@ class RandomSegmentTimeSeriesSynthesizer:
             hzphss2 = hzphss2 + deltaPha2
 
             # 计算窗口长度 (约半个周期)
-            # Delphi: wlen = max(int(sample_rate/2/freq) * 2, 2)
             wlen = max(int(self.sample_rate / 2 / freq) * 2, 2)
 
-            # 极化1 (TM模式) - 随机段长度 + 部分窗
-            # Delphi: da1 := RandG(1, 1); dp1 := Random * System.Pi * 2;
-            # 注意: da1和dp1在每段循环内生成 (不是每极化生成一次)
-            leftcount = n_samples
-            while leftcount > 0:
-                # Delphi: tmpcount := Ceil(Abs(SampleRate / freList[I] * (RandG(SyntheticPeriods, SyntheticPeriods / 2))));
-                mean_len = int(self.sample_rate / freq * self.synthetic_periods)
-                tmpcount = int(abs(rng.normal(mean_len, mean_len / 2)))
-                while tmpcount < 10:
-                    tmpcount = int(abs(rng.normal(mean_len, mean_len / 2)))
+            # 生成单频分段信号并叠加到总输出
+            freq_signal = self._generate_single_freq_segments(
+                examps1,
+                eyamps1,
+                hxamps1,
+                hyamps1,
+                hzamps1,
+                exphss1,
+                eyphss1,
+                hxphss1,
+                hyphss1,
+                hzphss1,
+                examps2,
+                eyamps2,
+                hxamps2,
+                hyamps2,
+                hzamps2,
+                exphss2,
+                eyphss2,
+                hxphss2,
+                hyphss2,
+                hzphss2,
+                freq,
+                n_samples,
+                wlen,
+                rng,
+            )
 
-                # 确保段长度不会太小或太大
-                if tmpcount > leftcount:
-                    tmpcount = leftcount
-                if leftcount - tmpcount < 10:
-                    tmpcount = leftcount
-
-                start = n_samples - leftcount
-
-                # Delphi: 在循环内为每段生成新的随机值
-                # TM模式: da1 = RandG(1,1) (高斯), dp1 = Random * 2π (均匀)
-                da1 = rng.normal(1, 1)  # 高斯随机幅度 (mean=1, std=1)
-                dp1 = rng.random() * 2 * np.pi  # 均匀随机相位 [0, 2π]
-
-                # 生成时间段并应用部分窗
-                amps1 = np.array(
-                    [
-                        examps1 * da1,
-                        eyamps1 * da1,
-                        hxamps1 * da1,
-                        hyamps1 * da1,
-                        hzamps1 * da1,
-                    ]
-                )
-                phas1 = np.array(
-                    [
-                        exphss1 + dp1,
-                        eyphss1 + dp1,
-                        hxphss1 + dp1,
-                        hyphss1 + dp1,
-                        hzphss1 + dp1,
-                    ]
-                )
-                self._generate_partial_windowed_segment(
-                    amps1,
-                    phas1,
-                    freq,
-                    tmpcount,
-                    wlen,
-                    start,
-                    ex1d1,
-                    ey1d1,
-                    hx1d1,
-                    hy1d1,
-                    hz1d1,
-                )
-
-                leftcount -= tmpcount
-
-            # 极化2 (TE模式) - 随机段长度 + 部分窗
-            # Delphi: da2 := Random * 2; dp2 := Random * System.Pi * 2;
-            # 注意: da2和dp2在每段循环内生成 (不是每极化生成一次)
-            leftcount = n_samples
-            while leftcount > 0:
-                mean_len = int(self.sample_rate / freq * self.synthetic_periods)
-                tmpcount = int(abs(rng.normal(mean_len, mean_len / 2)))
-                while tmpcount < 10:
-                    tmpcount = int(abs(rng.normal(mean_len, mean_len / 2)))
-
-                if tmpcount > leftcount:
-                    tmpcount = leftcount
-                if leftcount - tmpcount < 10:
-                    tmpcount = leftcount
-
-                start = n_samples - leftcount
-
-                # Delphi: 在循环内为每段生成新的随机值
-                # TE模式: da2 = Random * 2 (均匀[0,2]), dp2 = Random * 2π (均匀)
-                da2 = rng.random() * 2  # 均匀随机幅度 [0, 2]
-                dp2 = rng.random() * 2 * np.pi  # 均匀随机相位 [0, 2π]
-
-                amps2 = np.array(
-                    [
-                        examps2 * da2,
-                        eyamps2 * da2,
-                        hxamps2 * da2,
-                        hyamps2 * da2,
-                        hzamps2 * da2,
-                    ]
-                )
-                phas2 = np.array(
-                    [
-                        exphss2 + dp2,
-                        eyphss2 + dp2,
-                        hxphss2 + dp2,
-                        hyphss2 + dp2,
-                        hzphss2 + dp2,
-                    ]
-                )
-                self._generate_partial_windowed_segment(
-                    amps2,
-                    phas2,
-                    freq,
-                    tmpcount,
-                    wlen,
-                    start,
-                    ex1d2,
-                    ey1d2,
-                    hx1d2,
-                    hy1d2,
-                    hz1d2,
-                )
-
-                leftcount -= tmpcount
-
-        # 合并两个极化模式 - 使用极化角混合
-        # 极化角控制TE/TM模式混合比例: ex = ex_TM * cos(θ) + ex_TE * sin(θ)
-        # Delphi原始算法使用简单加法，这里增强为极化角混合模拟自然源极化方向变化
-        # θ 在 [0, 2π) 范围内随机变化，每段使用相同的极化角实现一致的混合
-        pol_angle = rng.random() * 2 * np.pi
-        tm_weight = np.cos(pol_angle)
-        te_weight = np.sin(pol_angle)
-
-        ex = ex1d1 * tm_weight + ex1d2 * te_weight
-        ey = ey1d1 * tm_weight + ey1d2 * te_weight
-        hx = hx1d1 * tm_weight + hx1d2 * te_weight
-        hy = hy1d1 * tm_weight + hy1d2 * te_weight
-        hz = hz1d1 * tm_weight + hz1d2 * te_weight
+            ex += freq_signal[0]
+            ey += freq_signal[1]
+            hx += freq_signal[2]
+            hy += freq_signal[3]
+            hz += freq_signal[4]
 
         return {
             "ex": ex,
@@ -1097,73 +830,203 @@ class RandomSegmentTimeSeriesSynthesizer:
             "n_samples": n_samples,
         }
 
-    def _generate_partial_windowed_segment(
+    def _generate_single_freq_segments(
         self,
-        amps: np.ndarray,
-        phas: np.ndarray,
-        freq: float,
-        seg_len: int,
-        wlen: int,
-        start: int,
-        ex_out: np.ndarray,
-        ey_out: np.ndarray,
-        hx_out: np.ndarray,
-        hy_out: np.ndarray,
-        hz_out: np.ndarray,
+        examps1,
+        eyamps1,
+        hxamps1,
+        hyamps1,
+        hzamps1,
+        exphss1,
+        eyphss1,
+        hxphss1,
+        hyphss1,
+        hzphss1,
+        examps2,
+        eyamps2,
+        hxamps2,
+        hyamps2,
+        hzamps2,
+        exphss2,
+        eyphss2,
+        hxphss2,
+        hyphss2,
+        hzphss2,
+        freq,
+        n_samples,
+        wlen,
+        rng,
     ):
         """
-        生成单个带部分窗的时间段
+        生成单频分段时域信号
 
-        Args:
-            amps: [amp_ex, amp_ey, amp_hx, amp_hy, amp_hz] 幅度数组
-            phas: [pha_ex, pha_ey, pha_hx, pha_hy, pha_hz] 相位数组
-            freq: 频率
-            seg_len: 段长度
-            wlen: 窗长度
-            start: 起始位置
-            ex_out, ey_out, ...: 输出数组
+        流程:
+        1. 生成若干段随机长度的时间序列
+        2. 每段独立随机: 振幅、相位、极化角
+        3. 边界应用余弦渐变窗保证连续性
+        4. 拼接所有段
         """
-        # 创建时间序列
+        # 输出数组
+        ex_out = np.zeros(n_samples)
+        ey_out = np.zeros(n_samples)
+        hx_out = np.zeros(n_samples)
+        hy_out = np.zeros(n_samples)
+        hz_out = np.zeros(n_samples)
+
+        left = n_samples
+        seg_start = 0
+
+        while left > 0:
+            # 随机段长度 - 高斯分布
+            mean_len = int(self.sample_rate / freq * self.synthetic_periods)
+            seg_len = int(abs(rng.normal(mean_len, mean_len / 2)))
+            seg_len = max(seg_len, 10)  # 最小10样本
+            seg_len = min(seg_len, left)  # 不超过剩余长度
+
+            # 每段随机振幅
+            da1 = rng.normal(1, 1)  # TM模式: 高斯N(1,1)
+            dp1 = rng.random() * 2 * np.pi  # 随机相位
+            da2 = rng.random() * 2  # TE模式: 均匀[0,2]
+            dp2 = rng.random() * 2 * np.pi  # 随机相位
+
+            # 每段随机极化角 - 控制TE/TM混合
+            pol_angle = rng.random() * 2 * np.pi
+            tm_weight = np.cos(pol_angle)
+            te_weight = np.sin(pol_angle)
+
+            # 构建幅度和相位数组
+            amps1 = np.array(
+                [
+                    examps1 * da1,
+                    eyamps1 * da1,
+                    hxamps1 * da1,
+                    hyamps1 * da1,
+                    hzamps1 * da1,
+                ]
+            )
+            phas1 = np.array(
+                [
+                    exphss1 + dp1,
+                    eyphss1 + dp1,
+                    hxphss1 + dp1,
+                    hyphss1 + dp1,
+                    hzphss1 + dp1,
+                ]
+            )
+
+            amps2 = np.array(
+                [
+                    examps2 * da2,
+                    eyamps2 * da2,
+                    hxamps2 * da2,
+                    hyamps2 * da2,
+                    hzamps2 * da2,
+                ]
+            )
+            phas2 = np.array(
+                [
+                    exphss2 + dp2,
+                    eyphss2 + dp2,
+                    hxphss2 + dp2,
+                    hyphss2 + dp2,
+                    hzphss2 + dp2,
+                ]
+            )
+
+            # 生成时间段 (TM和TE分别生成再混合)
+            seg_signal = self._generate_mixed_segment(
+                amps1,
+                phas1,
+                amps2,
+                phas2,
+                freq,
+                seg_len,
+                wlen,
+                tm_weight,
+                te_weight,
+                rng,
+            )
+
+            # 叠加到输出
+            ex_out[seg_start : seg_start + seg_len] += seg_signal[0]
+            ey_out[seg_start : seg_start + seg_len] += seg_signal[1]
+            hx_out[seg_start : seg_start + seg_len] += seg_signal[2]
+            hy_out[seg_start : seg_start + seg_len] += seg_signal[3]
+            hz_out[seg_start : seg_start + seg_len] += seg_signal[4]
+
+            seg_start += seg_len
+            left -= seg_len
+
+        return ex_out, ey_out, hx_out, hy_out, hz_out
+
+    def _generate_mixed_segment(
+        self, amps1, phas1, amps2, phas2, freq, seg_len, wlen, tm_weight, te_weight, rng
+    ):
+        """
+        生成单个混合段
+
+        每段内:
+        1. 生成TM模式信号
+        2. 生成TE模式信号
+        3. 按极化角混合
+        4. 边界应用余弦渐变窗保证与相邻段连续
+        """
         t = np.arange(seg_len) / self.sample_rate
 
-        # 各分量
-        ex_seg = amps[0] * np.cos(2 * np.pi * freq * t + phas[0])
-        ey_seg = amps[1] * np.cos(2 * np.pi * freq * t + phas[1])
-        hx_seg = amps[2] * np.cos(2 * np.pi * freq * t + phas[2])
-        hy_seg = amps[3] * np.cos(2 * np.pi * freq * t + phas[3])
-        hz_seg = amps[4] * np.cos(2 * np.pi * freq * t + phas[4])
+        # TM模式
+        ex_tm = amps1[0] * np.cos(2 * np.pi * freq * t + phas1[0])
+        ey_tm = amps1[1] * np.cos(2 * np.pi * freq * t + phas1[1])
+        hx_tm = amps1[2] * np.cos(2 * np.pi * freq * t + phas1[2])
+        hy_tm = amps1[3] * np.cos(2 * np.pi * freq * t + phas1[3])
+        hz_tm = amps1[4] * np.cos(2 * np.pi * freq * t + phas1[4])
 
-        # 部分窗 - Delphi算法
-        # 如果段长度 > 2*wlen: 对首尾wlen样本应用窗
-        # 否则: 不应用窗
+        # TE模式
+        ex_te = amps2[0] * np.cos(2 * np.pi * freq * t + phas2[0])
+        ey_te = amps2[1] * np.cos(2 * np.pi * freq * t + phas2[1])
+        hx_te = amps2[2] * np.cos(2 * np.pi * freq * t + phas2[2])
+        hy_te = amps2[3] * np.cos(2 * np.pi * freq * t + phas2[3])
+        hz_te = amps2[4] * np.cos(2 * np.pi * freq * t + phas2[4])
+
+        # 按极化角混合
+        ex = ex_tm * tm_weight + ex_te * te_weight
+        ey = ey_tm * tm_weight + ey_te * te_weight
+        hx = hx_tm * tm_weight + hx_te * te_weight
+        hy = hy_tm * tm_weight + hy_te * te_weight
+        hz = hz_tm * tm_weight + hz_te * te_weight
+
+        # 边界余弦窗 - 保证段间连续性
         if seg_len > wlen * 2:
-            end = start + seg_len
+            # 应用余弦渐变窗到边界
+            window = self._cosine_window(seg_len, wlen)
+            ex = ex * window
+            ey = ey * window
+            hx = hx * window
+            hy = hy * window
+            hz = hz * window
 
-            # 应用窗到边缘
-            ex_out[start : start + wlen] += ex_seg[:wlen] * np.hanning(wlen)
-            ex_out[end - wlen : end] += ex_seg[-wlen:] * np.hanning(wlen)
-            ex_out[start + wlen : end - wlen] += ex_seg[wlen:-wlen]
+        return ex, ey, hx, hy, hz
 
-            ey_out[start : start + wlen] += ey_seg[:wlen] * np.hanning(wlen)
-            ey_out[end - wlen : end] += ey_seg[-wlen:] * np.hanning(wlen)
-            ey_out[start + wlen : end - wlen] += ey_seg[wlen:-wlen]
+    def _cosine_window(self, seg_len, wlen):
+        """
+        创建余弦渐变窗
 
-            hx_out[start : start + wlen] += hx_seg[:wlen] * np.hanning(wlen)
-            hx_out[end - wlen : end] += hx_seg[-wlen:] * np.hanning(wlen)
-            hx_out[start + wlen : end - wlen] += hx_seg[wlen:-wlen]
+        窗函数形状:
+        - 开头wlen样本: 余弦上升 0→1
+        - 中间: 恒定1
+        - 结尾wlen样本: 余弦下降 1→0
 
-            hy_out[start : start + wlen] += hy_seg[:wlen] * np.hanning(wlen)
-            hy_out[end - wlen : end] += hy_seg[-wlen:] * np.hanning(wlen)
-            hy_out[start + wlen : end - wlen] += hy_seg[wlen:-wlen]
+        公式: window[i] = 0.5 * (1 - cos(π * i / wlen)) for i in [0, wlen)
+              window[i] = 1.0 for i in [wlen, seg_len - wlen)
+              window[i] = 0.5 * (1 + cos(π * (i - (seg_len - wlen)) / wlen)) for i in [seg_len - wlen, seg_len)
+        """
+        window = np.ones(seg_len)
 
-            hz_out[start : start + wlen] += hz_seg[:wlen] * np.hanning(wlen)
-            hz_out[end - wlen : end] += hz_seg[-wlen:] * np.hanning(wlen)
-            hz_out[start + wlen : end - wlen] += hz_seg[wlen:-wlen]
-        else:
-            # 短段不应用窗
-            end = start + seg_len
-            ex_out[start:end] += ex_seg
-            ey_out[start:end] += ey_seg
-            hx_out[start:end] += hx_seg
-            hy_out[start:end] += hy_seg
-            hz_out[start:end] += hz_seg
+        # 上升沿
+        if wlen > 0 and wlen < seg_len // 2:
+            for i in range(wlen):
+                window[i] = 0.5 * (1 - np.cos(np.pi * i / wlen))
+            # 下降沿
+            for i in range(wlen):
+                window[seg_len - 1 - i] = 0.5 * (1 - np.cos(np.pi * i / wlen))
+
+        return window
