@@ -122,9 +122,17 @@ class MTWorkflowAPI:
     # ========================================================================
 
     def synthesize_time_series(
-        self, band: str = "TS3", duration: float = 10.0, seed: Optional[int] = 42
+        self,
+        band: str = "TS3",
+        duration: float = 10.0,
+        seed: Optional[int] = None,
+        start_time: Optional[datetime] = None,
     ) -> Dict:
-        """合成时间序列"""
+        """
+        合成时间序列
+
+        重要: 随机种子与时间绑定 - 确保相同时段产生相同的合成结果
+        """
         from synthetic_mt import ForwardSite, nature_magnetic_amplitude
 
         if self.forward_calc is None:
@@ -143,11 +151,20 @@ class MTWorkflowAPI:
         fields = self.forward_calc.calculate_fields(band_periods)
         site = ForwardSite(name=f"Site_{self.model.name}", x=0.0, y=0.0, fields=fields)
 
-        # 合成时间序列
-        synth = TimeSeriesSynthesizer(config)
-        t1 = datetime(2023, 1, 1, 0, 0, 0)
+        # 确定开始时间
+        if start_time is None:
+            start_time = datetime(2023, 1, 1, 0, 0, 0)
+
+        # 如果未指定种子,则从开始时间派生
+        if seed is None:
+            start_ts = (start_time - datetime(1970, 1, 1)).total_seconds()
+            seed = int(start_ts) + int(duration * 1000)
+
+        t1 = start_time
         t2 = t1 + timedelta(seconds=int(duration))
 
+        # 合成时间序列
+        synth = TimeSeriesSynthesizer(config)
         ex, ey, hx, hy, hz = synth.generate(site, t1, t2, seed=seed)
 
         self.current_time_series = {
@@ -163,6 +180,7 @@ class MTWorkflowAPI:
             "duration": duration,
             "n_samples": len(ex),
             "sample_rate": config.sample_rate,
+            "seed": seed,
         }
 
         return self.current_time_series
@@ -171,8 +189,9 @@ class MTWorkflowAPI:
         self,
         band: str = "TS3",
         duration: float = 10.0,
-        seed: Optional[int] = 42,
+        seed: Optional[int] = None,
         synthetic_periods: float = 8.0,
+        start_time: Optional[datetime] = None,
     ) -> Dict:
         """
         随机分段合成时间序列 - 论文RANDOM_SEG_PARTIAL算法
@@ -180,11 +199,18 @@ class MTWorkflowAPI:
         使用与论文一致的随机振幅/相位扰动，模拟真实自然源变化。
         处理结果不会精确匹配正演（这是预期行为）。
 
+        重要: 随机种子与时间绑定
+        - 如果不指定seed, 则自动从start_time派生种子,确保相同时段产生相同的随机序列
+        - 这保证了多个测点在同一时段记录时,天然场源的随机扰动完全一致
+        - 这符合天然场源对所有测点同时、同步、相同的物理特性
+
         Args:
             band: 频段 ('TS3', 'TS4', 'TS5')
             duration: 时长 (秒)
-            seed: 随机种子
+            seed: 随机种子. 如果为None,则从start_time自动派生
             synthetic_periods: 合成周期数（每个频点包含的周期数，影响分段长度）
+            start_time: 合成开始时间. 如果为None,则使用默认值.
+                        用于: 1) 计算deltaPha相位偏移 2) 派生随机种子
         """
         from .core import RandomSegmentTimeSeriesSynthesizer
 
@@ -203,16 +229,35 @@ class MTWorkflowAPI:
         # 计算fields (包含阻抗)
         fields = self.forward_calc.calculate_fields(band_periods)
 
-        # 随机分段合成
+        # 确定开始时间和种子
+        # 默认开始时间 (可追溯的固定值)
+        if start_time is None:
+            start_time = datetime(2023, 1, 1, 0, 0, 0)
+
+        # 计算开始时间偏移(秒),用于deltaPha计算
+        start_time_offset = (start_time - datetime(1970, 1, 1)).total_seconds()
+
+        # 如果未指定种子,则从开始时间派生
+        # 物理意义: 相同的时段产生相同的天然场源随机扰动
+        if seed is None:
+            # 使用时间戳的整数部分作为种子,确保相同秒产生相同种子
+            seed = int(start_time_offset) + int(
+                duration * 1000
+            )  # 加入duration防止边界情况
+
+        t1 = start_time
+        t2 = t1 + timedelta(seconds=int(duration))
+
+        # 随机分段合成 - 传入start_time_offset用于相位计算
         synth = RandomSegmentTimeSeriesSynthesizer(
             sample_rate=config.sample_rate, synthetic_periods=synthetic_periods
         )
         ts_result = synth.generate_from_fields(
-            fields, duration=duration, seed=seed if seed is not None else 42
+            fields,
+            duration=duration,
+            seed=seed,
+            start_time=start_time_offset,
         )
-
-        t1 = datetime(2023, 1, 1, 0, 0, 0)
-        t2 = t1 + timedelta(seconds=int(duration))
 
         # 提取频率信息
         frequencies = np.array([f.freq for f in fields])
@@ -232,6 +277,7 @@ class MTWorkflowAPI:
             "sample_rate": config.sample_rate,
             "frequencies": frequencies,
             "method": "random_seg_partial",
+            "seed": seed,  # 记录使用的种子,便于多测点验证
         }
 
         return self.current_time_series
