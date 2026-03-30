@@ -7,7 +7,11 @@
 
 import numpy as np
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, TYPE_CHECKING
+
+# 仅用于类型检查的导入，避免循环依赖
+if TYPE_CHECKING:
+    from ..config import SegmentedAcquisitionConfig
 
 # 物理常数
 MU0 = 4 * np.pi * 1e-7  # 真空磁导率 (H/m)
@@ -516,6 +520,514 @@ class TimeSeriesProcessor:
             "Zyx": zyx_est,
             "app_resistivity": rho_a,
             "phase": phase,
+        }
+
+
+# ============================================================================
+# 分段时间序列处理器
+# ============================================================================
+
+
+class SegmentedTimeSeriesProcessor:
+    """
+    分段时间序列处理器
+
+    处理分段采集的数据 (HIGH/MED交替采集，带gap):
+    1. 对每段数据进行FFT
+    2. 计算交叉谱
+    3. 跨段平均交叉谱
+    4. 从平均交叉谱计算阻抗
+
+    注意: 每个频段只能处理其频率范围内的数据
+    - HIGH (TS3): 1-1000 Hz (周期 0.001-1.0s)
+    - MED (TS4): 0.1-10 Hz (周期 0.1-10s)
+    - LOW (TS5): 1e-6-1 Hz (周期 1-1e6s)
+    """
+
+    # Band to frequency range mapping
+    BAND_FREQ_RANGES = {
+        "HIGH": (1.0, 1000.0),  # Hz
+        "MED": (0.1, 10.0),  # Hz
+        "LOW": (1e-6, 1.0),  # Hz
+    }
+
+    def __init__(self, segments: List[Dict], sample_rate: float = None):
+        """
+        Args:
+            segments: 分段数据列表，每段包含:
+                - ex, ey, hx, hy, hz: 时间序列数组
+                - band: 频段标识 (如 'HIGH', 'MED', 'LOW')
+                - sample_rate: 采样率 (可选，会覆盖默认sample_rate)
+            sample_rate: 默认采样率 (用于频率网格，当segments不含sample_rate时使用)
+        """
+        self.segments = segments
+        self.sample_rate = sample_rate
+
+        # 验证segments结构
+        if not segments:
+            raise ValueError("segments列表不能为空")
+
+        # 按频段分组
+        self._band_segments: Dict[str, List[Dict]] = {}
+        for seg in segments:
+            band = seg.get("band", "UNKNOWN")
+            if band not in self._band_segments:
+                self._band_segments[band] = []
+            self._band_segments[band].append(seg)
+
+        # 使用最长段的长度作为频率分辨率参考
+        longest_seg = max(segments, key=lambda s: len(s.get("ex", [])))
+        self._ref_n = len(longest_seg.get("ex", []))
+        self._ref_sample_rate = longest_seg.get("sample_rate", sample_rate)
+
+        # 预计算FFT频率数组
+        self._freqs = np.fft.fftfreq(self._ref_n, 1.0 / self._ref_sample_rate)
+
+    def estimate_impedance_at_periods(
+        self, periods: np.ndarray, freq_tol: float = 0.1
+    ) -> Dict:
+        """
+        估计指定周期处的阻抗
+
+        对每个频段分别处理，然后合并结果
+
+        Args:
+            periods: 目标周期数组
+            freq_tol: 频率容差 (默认0.1即10%)
+
+        Returns:
+            {
+                "periods": np.ndarray,
+                "Zxx", "Zxy", "Zyx", "Zyy": 阻抗张量
+                "app_resistivity": 视电阻率
+                "phase": 相位
+                "coherence": 相干度
+                "residual": 残差
+            }
+        """
+        target_freqs = 1.0 / periods
+        n = len(periods)
+
+        # 初始化输出数组
+        zxx_est = np.zeros(n, dtype=complex)
+        zxy_est = np.zeros(n, dtype=complex)
+        zyx_est = np.zeros(n, dtype=complex)
+        zyy_est = np.zeros(n, dtype=complex)
+
+        # 用于加权平均的权重
+        total_weight = np.zeros(n)
+        weighted_coherence = np.zeros(n)
+        weighted_residual = np.zeros(n, dtype=complex)
+
+        eps = 1e-20
+
+        # 对每个频段分别处理
+        for band, band_segs in self._band_segments.items():
+            # 获取该频段的频率范围
+            freq_range = self.BAND_FREQ_RANGES.get(band)
+            if freq_range is None:
+                continue
+            band_freq_min, band_freq_max = freq_range
+
+            # 计算该频段的平均交叉谱
+            cross_spectra = self._compute_average_cross_spectra(band_segs)
+
+            if cross_spectra is None:
+                continue
+
+            # 从交叉谱计算阻抗
+            band_result = self._compute_impedance_from_cross_spectra(
+                cross_spectra, target_freqs, freq_tol
+            )
+
+            if band_result is None:
+                continue
+
+            # 按段数加权平均，但只对目标频率在当前频段范围内的数据生效
+            weight = len(band_segs)
+            for i in range(n):
+                if band_result["valid_mask"][i]:
+                    # 检查目标频率是否在当前频段的有效范围内
+                    target_freq = target_freqs[i]
+                    if band_freq_min <= target_freq <= band_freq_max:
+                        zxx_est[i] += band_result["Zxx"][i] * weight
+                        zxy_est[i] += band_result["Zxy"][i] * weight
+                        zyx_est[i] += band_result["Zyx"][i] * weight
+                        zyy_est[i] += band_result["Zyy"][i] * weight
+                        weighted_coherence[i] += band_result["coherence"][i] * weight
+                        weighted_residual[i] += band_result["residual"][i] * weight
+                        total_weight[i] += weight
+
+        # 完成加权平均
+        valid_mask = total_weight > 0
+        for i in range(n):
+            if valid_mask[i]:
+                w = total_weight[i]
+                zxx_est[i] /= w
+                zxy_est[i] /= w
+                zyx_est[i] /= w
+                zyy_est[i] /= w
+                weighted_coherence[i] /= w
+                weighted_residual[i] /= w
+
+        # 计算视电阻率和相位（使用Zxy）
+        omega = 2 * np.pi / periods
+        rho_a = np.abs(zxy_est) ** 2 / (omega * MU0)
+        phase = np.arctan2(zxy_est.imag, zxy_est.real) * 180.0 / np.pi
+
+        return {
+            "periods": periods,
+            "frequencies": target_freqs,
+            "Zxx": zxx_est,
+            "Zxy": zxy_est,
+            "Zyx": zyx_est,
+            "Zyy": zyy_est,
+            "app_resistivity": rho_a,
+            "phase": phase,
+            "coherence": weighted_coherence,
+            "residual": weighted_residual,
+        }
+
+    def _find_signal_length(self, arr: np.ndarray) -> int:
+        """
+        查找数组中实际信号的长度（非零部分）
+
+        由于分段采集数据在信号后会填充零值，需要找到实际信号长度
+        来进行正确的FFT计算。
+
+        Args:
+            arr: 时间序列数组
+
+        Returns:
+            实际信号长度（不包括尾部零值）
+        """
+        # 找到最后一个非零值的索引
+        nonzero_indices = np.nonzero(arr)[0]
+        if len(nonzero_indices) == 0:
+            return len(arr)
+        return nonzero_indices[-1] + 1
+
+    def _compute_average_cross_spectra(self, segments: List[Dict]) -> Optional[Dict]:
+        """
+        计算段列表的平均交叉谱
+
+        对每个段只在其实际信号长度上进行FFT，避免对零填充部分进行FFT
+        导致频谱失真。
+
+        Args:
+            segments: 同一频段的段列表
+
+        Returns:
+            包含平均交叉谱的字典，或None如果无效
+        """
+        if not segments:
+            return None
+
+        # 收集所有段的FFT结果
+        all_ex_fft = []
+        all_ey_fft = []
+        all_hx_fft = []
+        all_hy_fft = []
+        all_seg_sample_rate = []
+        all_n_sig = []
+
+        for seg in segments:
+            ex = seg.get("ex")
+            ey = seg.get("ey")
+            hx = seg.get("hx")
+            hy = seg.get("hy")
+
+            if ex is None or ey is None or hx is None or hy is None:
+                continue
+
+            seg_sample_rate = seg.get("sample_rate", self.sample_rate)
+
+            if seg_sample_rate is None:
+                continue
+
+            # 找到实际信号长度（不包括尾部零填充）
+            n_sig = min(
+                self._find_signal_length(ex),
+                self._find_signal_length(ey),
+                self._find_signal_length(hx),
+                self._find_signal_length(hy),
+            )
+
+            if n_sig < 10:  # 信号太短，跳过
+                continue
+
+            # 使用实际信号长度进行FFT
+            ex_fft = np.fft.fft(ex[:n_sig] - np.mean(ex[:n_sig]))
+            ey_fft = np.fft.fft(ey[:n_sig] - np.mean(ey[:n_sig]))
+            hx_fft = np.fft.fft(hx[:n_sig] - np.mean(hx[:n_sig]))
+            hy_fft = np.fft.fft(hy[:n_sig] - np.mean(hy[:n_sig]))
+
+            all_ex_fft.append(ex_fft)
+            all_ey_fft.append(ey_fft)
+            all_hx_fft.append(hx_fft)
+            all_hy_fft.append(hy_fft)
+            all_seg_sample_rate.append(seg_sample_rate)
+            all_n_sig.append(n_sig)
+
+        if not all_ex_fft:
+            return None
+
+        # 使用参考段的频率数组（用于输出）
+        ref_pos_mask = self._freqs > 0
+        ref_freqs = self._freqs[ref_pos_mask]
+
+        # 初始化累加器
+        sum_ExHx = np.zeros(len(ref_freqs), dtype=complex)
+        sum_ExHy = np.zeros(len(ref_freqs), dtype=complex)
+        sum_EyHx = np.zeros(len(ref_freqs), dtype=complex)
+        sum_EyHy = np.zeros(len(ref_freqs), dtype=complex)
+        sum_HxHx = np.zeros(len(ref_freqs), dtype=complex)
+        sum_HyHy = np.zeros(len(ref_freqs), dtype=complex)
+        sum_HxHy = np.zeros(len(ref_freqs), dtype=complex)
+        sum_HyHx = np.zeros(len(ref_freqs), dtype=complex)
+        sum_ExEx = np.zeros(len(ref_freqs), dtype=complex)
+        sum_EyEy = np.zeros(len(ref_freqs), dtype=complex)
+        sum_ExEy = np.zeros(len(ref_freqs), dtype=complex)
+
+        count = 0
+        for idx in range(len(all_ex_fft)):
+            ex_fft = all_ex_fft[idx]
+            ey_fft = all_ey_fft[idx]
+            hx_fft = all_hx_fft[idx]
+            hy_fft = all_hy_fft[idx]
+            seg_sr = all_seg_sample_rate[idx]
+            n_sig = all_n_sig[idx]
+
+            # 计算该段的频率数组（仅正频率部分）
+            seg_freqs_full = np.fft.fftfreq(n_sig, 1.0 / seg_sr)
+            seg_pos_mask = seg_freqs_full > 0
+            seg_freqs = seg_freqs_full[seg_pos_mask]
+
+            # 计算归一化因子（基于实际信号长度）
+            norm = 2.0 / n_sig
+
+            # 计算交叉谱
+            ExHx = (ex_fft * np.conj(hx_fft))[seg_pos_mask] * norm
+            ExHy = (ex_fft * np.conj(hy_fft))[seg_pos_mask] * norm
+            EyHx = (ey_fft * np.conj(hx_fft))[seg_pos_mask] * norm
+            EyHy = (ey_fft * np.conj(hy_fft))[seg_pos_mask] * norm
+            HxHx = (hx_fft * np.conj(hx_fft))[seg_pos_mask] * norm
+            HyHy = (hy_fft * np.conj(hy_fft))[seg_pos_mask] * norm
+            HxHy = (hx_fft * np.conj(hy_fft))[seg_pos_mask] * norm
+            HyHx = (hy_fft * np.conj(hx_fft))[seg_pos_mask] * norm
+            ExEx = (ex_fft * np.conj(ex_fft))[seg_pos_mask] * norm
+            EyEy = (ey_fft * np.conj(ey_fft))[seg_pos_mask] * norm
+            ExEy = (ex_fft * np.conj(ey_fft))[seg_pos_mask] * norm
+
+            # 插值到参考频率网格
+            if len(seg_freqs) > 1:
+                # 使用线性插值（对于频率轴是合理的近似）
+                ExHx_interp = np.interp(ref_freqs, seg_freqs, np.abs(ExHx)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(ExHx))
+                )
+                ExHy_interp = np.interp(ref_freqs, seg_freqs, np.abs(ExHy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(ExHy))
+                )
+                EyHx_interp = np.interp(ref_freqs, seg_freqs, np.abs(EyHx)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(EyHx))
+                )
+                EyHy_interp = np.interp(ref_freqs, seg_freqs, np.abs(EyHy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(EyHy))
+                )
+                HxHx_interp = np.interp(ref_freqs, seg_freqs, np.abs(HxHx)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(HxHx))
+                )
+                HyHy_interp = np.interp(ref_freqs, seg_freqs, np.abs(HyHy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(HyHy))
+                )
+                HxHy_interp = np.interp(ref_freqs, seg_freqs, np.abs(HxHy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(HxHy))
+                )
+                HyHx_interp = np.interp(ref_freqs, seg_freqs, np.abs(HyHx)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(HyHx))
+                )
+                ExEx_interp = np.interp(ref_freqs, seg_freqs, np.abs(ExEx)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(ExEx))
+                )
+                EyEy_interp = np.interp(ref_freqs, seg_freqs, np.abs(EyEy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(EyEy))
+                )
+                ExEy_interp = np.interp(ref_freqs, seg_freqs, np.abs(ExEy)) * np.exp(
+                    1j * np.interp(ref_freqs, seg_freqs, np.angle(ExEy))
+                )
+            else:
+                # 频率点数太少，无法插值
+                continue
+
+            # 累积交叉谱
+            sum_ExHx += ExHx_interp
+            sum_ExHy += ExHy_interp
+            sum_EyHx += EyHx_interp
+            sum_EyHy += EyHy_interp
+            sum_HxHx += HxHx_interp
+            sum_HyHy += HyHy_interp
+            sum_HxHy += HxHy_interp
+            sum_HyHx += HyHx_interp
+            sum_ExEx += ExEx_interp
+            sum_EyEy += EyEy_interp
+            sum_ExEy += ExEy_interp
+
+            count += 1
+
+        if count == 0:
+            return None
+
+        # 平均
+        return {
+            "freqs": ref_freqs,
+            "ExHx": sum_ExHx / count,
+            "ExHy": sum_ExHy / count,
+            "EyHx": sum_EyHx / count,
+            "EyHy": sum_EyHy / count,
+            "HxHx": sum_HxHx / count,
+            "HyHy": sum_HyHy / count,
+            "HxHy": sum_HxHy / count,
+            "HyHx": sum_HyHx / count,
+            "ExEx": sum_ExEx / count,
+            "EyEy": sum_EyEy / count,
+            "ExEy": sum_ExEy / count,
+            "n_segs": count,
+        }
+
+    def _compute_impedance_from_cross_spectra(
+        self,
+        cross_spectra: Dict,
+        target_freqs: np.ndarray,
+        freq_tol: float = 0.1,
+    ) -> Optional[Dict]:
+        """
+        从交叉谱计算阻抗张量
+
+        Args:
+            cross_spectra: 交叉谱字典
+            target_freqs: 目标频率数组
+            freq_tol: 频率容差
+
+        Returns:
+            包含阻抗和质量的字典，或None如果无效
+        """
+        freqs = cross_spectra.get("freqs")
+        if freqs is None or len(freqs) == 0:
+            return None
+
+        n_freqs = len(freqs)
+        n_targets = len(target_freqs)
+
+        # 提取交叉谱
+        ExHx = cross_spectra["ExHx"]
+        ExHy = cross_spectra["ExHy"]
+        EyHx = cross_spectra["EyHx"]
+        EyHy = cross_spectra["EyHy"]
+        HxHx = cross_spectra["HxHx"]
+        HyHy = cross_spectra["HyHy"]
+        HxHy = cross_spectra["HxHy"]
+        HyHx = cross_spectra["HyHx"]
+        ExEx = cross_spectra["ExEx"]
+        EyEy = cross_spectra["EyEy"]
+        ExEy = cross_spectra["ExEy"]
+
+        # 初始化
+        Zxx = np.zeros(n_freqs, dtype=complex)
+        Zxy = np.zeros(n_freqs, dtype=complex)
+        Zyx = np.zeros(n_freqs, dtype=complex)
+        Zyy = np.zeros(n_freqs, dtype=complex)
+        coherence = np.zeros(n_freqs, dtype=float)
+        residual = np.zeros(n_freqs, dtype=complex)
+
+        eps = 1e-20
+        reg = 1e-10
+
+        for i in range(n_freqs):
+            # C_HH = [[HxHx, HxHy], [HyHx, HyHy]]
+            # C_EH = [[ExHx, ExHy], [EyHx, EyHy]]
+            C_HH = np.array([[HxHx[i], HxHy[i]], [HyHx[i], HyHy[i]]])
+            C_EH = np.array([[ExHx[i], ExHy[i]], [EyHx[i], EyHy[i]]])
+
+            # 计算Hx-Hy相干性
+            hxhy_mag = np.abs(HxHy[i])
+            hxhx_mag = np.abs(HxHx[i])
+            hyhy_mag = np.abs(HyHy[i])
+            coh_HxHy = hxhy_mag / np.sqrt(hxhx_mag * hyhy_mag + eps)
+
+            # 正则化稳定矩阵求逆
+            C_HH_reg = C_HH + reg * np.eye(2)
+            det = C_HH_reg[0, 0] * C_HH_reg[1, 1] - C_HH_reg[0, 1] * C_HH_reg[1, 0]
+
+            # 当Hx-Hy高度相关时，使用简单比值法
+            if coh_HxHy > 0.95 or np.abs(det) < eps:
+                Zxy[i] = ExHy[i] / (HyHy[i] + eps)
+                Zyx[i] = EyHx[i] / (HxHx[i] + eps)
+                Zxx[i] = 0
+                Zyy[i] = 0
+                Zyx[i] = -Zxy[i]
+            else:
+                # 标准最小二乘解: Z = C_EH * C_HH^(-1)
+                C_HH_inv = (
+                    np.array(
+                        [
+                            [C_HH_reg[1, 1], -C_HH_reg[0, 1]],
+                            [-C_HH_reg[1, 0], C_HH_reg[0, 0]],
+                        ]
+                    )
+                    / det
+                )
+
+                Z_tensor = C_EH @ C_HH_inv
+
+                Zxx[i] = Z_tensor[0, 0]
+                Zxy[i] = Z_tensor[0, 1]
+                Zyx[i] = Z_tensor[1, 0]
+                Zyy[i] = Z_tensor[1, 1]
+
+                # 计算拟合残差
+                E_fit = C_EH @ C_HH_inv @ C_HH
+                residual[i] = np.mean(np.abs(C_EH - E_fit))
+
+                # 计算相干性
+                C_EE = np.array([[ExEx[i], ExEy[i]], [np.conj(ExEy[i]), EyEy[i]]])
+                C_EE_trace = np.abs(ExEx[i]) + np.abs(EyEy[i])
+                C_HH_trace = np.abs(HxHx[i]) + np.abs(HyHy[i])
+                C_EH_fro = np.sqrt(
+                    np.abs(ExHx[i]) ** 2
+                    + np.abs(ExHy[i]) ** 2
+                    + np.abs(EyHx[i]) ** 2
+                    + np.abs(EyHy[i]) ** 2
+                )
+                coherence[i] = (C_EH_fro**2) / (C_EE_trace * C_HH_trace + eps)
+
+        # 插值到目标频率
+        zxx_target = np.zeros(n_targets, dtype=complex)
+        zxy_target = np.zeros(n_targets, dtype=complex)
+        zyx_target = np.zeros(n_targets, dtype=complex)
+        zyy_target = np.zeros(n_targets, dtype=complex)
+        coh_target = np.zeros(n_targets, dtype=float)
+        res_target = np.zeros(n_targets, dtype=complex)
+        valid_mask = np.zeros(n_targets, dtype=bool)
+
+        for i, target_f in enumerate(target_freqs):
+            idx = np.argmin(np.abs(freqs - target_f))
+            if np.abs(freqs[idx] - target_f) / target_f < freq_tol:
+                zxx_target[i] = Zxx[idx]
+                zxy_target[i] = Zxy[idx]
+                zyx_target[i] = Zyx[idx]
+                zyy_target[i] = Zyy[idx]
+                coh_target[i] = coherence[idx]
+                res_target[i] = residual[idx]
+                valid_mask[i] = True
+
+        return {
+            "Zxx": zxx_target,
+            "Zxy": zxy_target,
+            "Zyx": zyx_target,
+            "Zyy": zyy_target,
+            "coherence": coh_target,
+            "residual": res_target,
+            "valid_mask": valid_mask,
         }
 
 
@@ -1097,3 +1609,244 @@ class RandomSegmentTimeSeriesSynthesizer:
                 )
 
         return window
+
+
+# ============================================================================
+# 分段交替采集时间序列合成器
+# ============================================================================
+
+
+class SegmentedTimeSeriesSynthesizer:
+    """
+    分段交替采集时间序列合成器
+
+    实现多频段时间序列的交替采集模式:
+    - HIGH (TS3, 2400Hz): 高频段采集
+    - MED (TS4, 150Hz): 中频段采集
+    - LOW (TS5, 15Hz): 低频段连续采集
+
+    采集模式示例 (interval=300s, high_duration=2s, med_duration=16s):
+        HIGH(2s) → gap(298s) → MED(16s) → gap(284s) → HIGH(2s) → ...
+
+    Attributes:
+        config: 分段采集配置
+    """
+
+    # Band to TSConfig name mapping
+    BAND_TS_MAP = {
+        "HIGH": "TS3",
+        "MED": "TS4",
+        "LOW": "TS5",
+    }
+
+    def __init__(self, acquisition_config: "SegmentedAcquisitionConfig"):
+        """
+        初始化分段交替采集合成器
+
+        Args:
+            acquisition_config: 分段采集配置
+        """
+        self.config = acquisition_config
+
+    def generate(self, fields: List, seed: int = None) -> Dict:
+        """
+        生成分段交替采集的时间序列
+
+        Args:
+            fields: EMFields列表 (来自正演结果)
+            seed: 随机种子
+
+        Returns:
+            {
+                "segments": [
+                    {
+                        "band": "HIGH",
+                        "start_time": float,  # 秒
+                        "end_time": float,
+                        "duration": float,
+                        "sample_rate": float,
+                        "n_samples": int,
+                        "ex": np.ndarray, "ey": np.ndarray,
+                        "hx": np.ndarray, "hy": np.ndarray, "hz": np.ndarray,
+                    },
+                    ...
+                ],
+                "low": {
+                    "band": "LOW",
+                    "start_time": float,
+                    "end_time": float,
+                    "duration": float,
+                    "sample_rate": float,
+                    "n_samples": int,
+                    "ex": np.ndarray, "ey": np.ndarray,
+                    "hx": np.ndarray, "hy": np.ndarray, "hz": np.ndarray,
+                },
+                "schedule": {...},  # acquisition_config参数副本
+                "seed": int,
+            }
+        """
+        # Generate acquisition schedule
+        schedule = self.config.generate_schedule()
+        total_duration = self.config.total_duration
+
+        # Initialize result containers
+        segments = []
+        low_band_data = None
+
+        # Process each segment in schedule
+        for seg_idx, seg in enumerate(schedule):
+            band = seg["band"]
+            start_time = seg["start"]
+            end_time = seg["end"]
+            duration = seg["duration"]
+
+            # Get TSConfig for this band
+            ts_config_name = self.BAND_TS_MAP[band]
+            ts_config = TS_CONFIGS[ts_config_name]
+
+            # Filter fields to band's frequency range
+            band_fields = [
+                f for f in fields if ts_config.freq_min <= f.freq <= ts_config.freq_max
+            ]
+
+            # Skip if no fields in frequency range
+            if not band_fields:
+                # Create zero-filled segment
+                n_samples = int(ts_config.sample_rate * duration)
+                segments.append(
+                    {
+                        "band": band,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "duration": duration,
+                        "sample_rate": ts_config.sample_rate,
+                        "n_samples": n_samples,
+                        "ex": np.zeros(n_samples),
+                        "ey": np.zeros(n_samples),
+                        "hx": np.zeros(n_samples),
+                        "hy": np.zeros(n_samples),
+                        "hz": np.zeros(n_samples),
+                    }
+                )
+                continue
+
+            # Create synthesizer for this band
+            # Use default synthetic_periods=200 for good FFT resolution
+            synthesizer = RandomSegmentTimeSeriesSynthesizer(
+                sample_rate=ts_config.sample_rate,
+                synthetic_periods=200.0,
+                source_scale=1.0,
+            )
+
+            # Generate segment with seed for reproducibility
+            segment_seed = (seed + seg_idx) if seed is not None else None
+            ts_result = synthesizer.generate_from_fields(
+                fields=band_fields,
+                duration=duration,
+                seed=segment_seed,
+                start_time=start_time,
+            )
+
+            # Calculate gap padding if there's a gap after this segment
+            next_seg = schedule[seg_idx + 1] if seg_idx + 1 < len(schedule) else None
+            gap_samples = 0
+            if next_seg:
+                gap_duration = next_seg["start"] - end_time
+                if gap_duration > 0:
+                    gap_samples = int(ts_config.sample_rate * gap_duration)
+
+            # Total samples = segment + gap
+            n_segment_samples = ts_result["n_samples"]
+            n_total_samples = n_segment_samples + gap_samples
+
+            # Create full array with data + zero padding
+            ex_full = np.zeros(n_total_samples)
+            ey_full = np.zeros(n_total_samples)
+            hx_full = np.zeros(n_total_samples)
+            hy_full = np.zeros(n_total_samples)
+            hz_full = np.zeros(n_total_samples)
+
+            # Fill in the data
+            ex_full[:n_segment_samples] = ts_result["ex"]
+            ey_full[:n_segment_samples] = ts_result["ey"]
+            hx_full[:n_segment_samples] = ts_result["hx"]
+            hy_full[:n_segment_samples] = ts_result["hy"]
+            hz_full[:n_segment_samples] = ts_result["hz"]
+
+            segments.append(
+                {
+                    "band": band,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": duration,
+                    "sample_rate": ts_config.sample_rate,
+                    "n_samples": n_total_samples,
+                    "ex": ex_full,
+                    "ey": ey_full,
+                    "hx": hx_full,
+                    "hy": hy_full,
+                    "hz": hz_full,
+                }
+            )
+
+        # Generate continuous LOW band (TS5, 15Hz)
+        low_config = TS_CONFIGS["TS5"]
+        low_fields = [
+            f for f in fields if low_config.freq_min <= f.freq <= low_config.freq_max
+        ]
+
+        if low_fields:
+            low_synthesizer = RandomSegmentTimeSeriesSynthesizer(
+                sample_rate=low_config.sample_rate,
+                synthetic_periods=200.0,
+                source_scale=1.0,
+            )
+            low_seed = (seed + len(schedule)) if seed is not None else None
+            low_result = low_synthesizer.generate_from_fields(
+                fields=low_fields,
+                duration=total_duration,
+                seed=low_seed,
+                start_time=0.0,
+            )
+            low_band_data = {
+                "band": "LOW",
+                "start_time": 0.0,
+                "end_time": total_duration,
+                "duration": total_duration,
+                "sample_rate": low_config.sample_rate,
+                "n_samples": low_result["n_samples"],
+                "ex": low_result["ex"],
+                "ey": low_result["ey"],
+                "hx": low_result["hx"],
+                "hy": low_result["hy"],
+                "hz": low_result["hz"],
+            }
+        else:
+            # Create zero-filled low band
+            n_low_samples = int(low_config.sample_rate * total_duration)
+            low_band_data = {
+                "band": "LOW",
+                "start_time": 0.0,
+                "end_time": total_duration,
+                "duration": total_duration,
+                "sample_rate": low_config.sample_rate,
+                "n_samples": n_low_samples,
+                "ex": np.zeros(n_low_samples),
+                "ey": np.zeros(n_low_samples),
+                "hx": np.zeros(n_low_samples),
+                "hy": np.zeros(n_low_samples),
+                "hz": np.zeros(n_low_samples),
+            }
+
+        return {
+            "segments": segments,
+            "low": low_band_data,
+            "schedule": {
+                "interval": self.config.interval,
+                "high_duration": self.config.high_duration,
+                "med_duration": self.config.med_duration,
+                "total_duration": self.config.total_duration,
+                "cycle_duration": self.config.cycle_duration,
+            },
+            "seed": seed,
+        }

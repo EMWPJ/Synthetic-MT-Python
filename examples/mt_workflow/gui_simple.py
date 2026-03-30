@@ -36,6 +36,11 @@ from PySide6.QtWidgets import (
     QSplitter,
     QLineEdit,
     QDoubleSpinBox,
+    QMenuBar,
+    QMenu,
+    QListWidget,
+    QFileDialog,
+    QProgressBar,
 )
 from PySide6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -43,7 +48,11 @@ from matplotlib.figure import Figure
 
 # 导入后台API
 from backend.api import get_api, reset_api, MTWorkflowAPI
-from backend.core import TS_CONFIGS, get_default_processing_periods
+from backend.core import TS_CONFIGS, get_default_processing_periods, MU0
+
+# 导入XML站点读取器 (确保src路径在sys.path中)
+sys.path.insert(0, os.path.join(_project_root, "src"))
+from synthetic_mt.infrastructure.io.xmlsite import XMLSiteReader
 
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -84,22 +93,28 @@ class MTWorkflowGUI(QMainWindow):
         self._load_preset_model("uniform_100")
 
     def setup_ui(self):
+        # 创建菜单栏
+        self._create_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
 
-        # 左侧: 模型编辑
+        # 左侧: 测点列表
+        station = self._create_station_panel()
+        # 模型编辑
         left = self._create_model_panel()
         # 中间: 图表
         center = self._create_plot_panel()
         # 右侧: 控制
         right = self._create_control_panel()
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(station)
         splitter.addWidget(left)
         splitter.addWidget(center)
         splitter.addWidget(right)
-        splitter.setSizes([280, 700, 280])
+        splitter.setSizes([200, 280, 700, 280])
         layout.addWidget(splitter)
 
     def _create_model_panel(self) -> QWidget:
@@ -144,6 +159,33 @@ class MTWorkflowGUI(QMainWindow):
         self.rho_input.setDecimals(1)
         rho_edit_layout.addWidget(self.rho_input)
         layout.addLayout(rho_edit_layout)
+
+        return group
+
+    def _create_station_panel(self) -> QWidget:
+        """创建测点列表面板"""
+        group = QGroupBox("Stations")
+        layout = QVBoxLayout(group)
+
+        # 测点列表
+        self.station_list = QListWidget()
+        self.station_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        layout.addWidget(self.station_list)
+
+        # 按钮行
+        btn_layout = QHBoxLayout()
+        import_btn = QPushButton("Import")
+        import_btn.clicked.connect(self._import_station)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self._delete_station)
+        btn_layout.addWidget(import_btn)
+        btn_layout.addWidget(delete_btn)
+        layout.addLayout(btn_layout)
+
+        # 进度条 (默认隐藏)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
 
         return group
 
@@ -227,6 +269,209 @@ class MTWorkflowGUI(QMainWindow):
 
         layout.addStretch()
         return group
+
+    def _create_menu_bar(self):
+        """创建菜单栏"""
+        menubar = QMenuBar()
+
+        # File菜单
+        file_menu = QMenu("File", self)
+        file_menu.addAction("Import Station (XMLSite)", self._import_station)
+        file_menu.addAction("Export CSV", self._export_csv)
+        file_menu.addAction("Export NumPy", self._export_numpy)
+        file_menu.addSeparator()
+        file_menu.addAction("Save Project", self._save_project)
+        file_menu.addAction("Load Project", self._load_project)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit", self.close)
+        menubar.addMenu(file_menu)
+
+        # Run菜单
+        run_menu = QMenu("Run", self)
+        run_menu.addAction("Batch Run", self._batch_run)
+        menubar.addMenu(run_menu)
+
+        self.setMenuBar(menubar)
+
+    def _import_station(self):
+        """导入测点(XMLSite格式)"""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import Station(s)", "", "XMLSite Files (*.xmlsite);;All Files (*)"
+        )
+        if not file_paths:
+            return
+        imported_count = 0
+        for file_path in file_paths:
+            try:
+                reader = XMLSiteReader()
+                site = reader.read(file_path)
+                station_name = (
+                    site.name
+                    if site.name
+                    else os.path.basename(file_path).replace(".xmlsite", "")
+                )
+
+                # 验证数据
+                if not site.fields:
+                    raise ValueError("No Fields data found in XMLSite file")
+
+                # 从Fields提取数据
+                fields = site.fields
+                freqs = np.array([f.freq for f in fields])
+                periods = 1.0 / freqs
+
+                # 计算视电阻率和相位 (from Zxy)
+                # rho_a = |Zxy|^2 / (omega * mu0), omega = 2*pi/T
+                # phase = arctan2(Im(Zxy), Re(Zxy)) in degrees
+                zxy_arr = np.array([f.zxy for f in fields], dtype=complex)
+                omega = 2 * np.pi / periods
+                rho_a = np.abs(zxy_arr) ** 2 / (omega * MU0)
+                phase = np.arctan2(zxy_arr.imag, zxy_arr.real) * 180.0 / np.pi
+
+                # 提取阻抗分量
+                zxx_arr = np.array([f.zxx for f in fields], dtype=complex)
+                zyx_arr = np.array([f.zyx for f in fields], dtype=complex)
+                zyy_arr = np.array([f.zyy for f in fields], dtype=complex)
+
+                # 添加测点
+                self.api.add_station_with_data(
+                    name=station_name,
+                    x=site.x,
+                    y=site.y,
+                    periods=periods,
+                    rho_a=rho_a,
+                    phase=phase,
+                    zxx=zxx_arr,
+                    zxy=zxy_arr,
+                    zyx=zyx_arr,
+                    zyy=zyy_arr,
+                )
+                self.station_list.addItem(station_name)
+                imported_count += 1
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Error", f"Import failed for {file_path}: {e}"
+                )
+        self.statusBar().showMessage(f"Imported {imported_count} station(s)")
+
+    def _delete_station(self):
+        """删除选中的测点"""
+        selected = self.station_list.selectedItems()
+        if not selected:
+            return
+        for item in selected:
+            station_name = item.text()
+            self.api.remove_station(station_name)
+            self.station_list.takeItem(self.station_list.row(item))
+        self.statusBar().showMessage(f"Deleted {len(selected)} station(s)")
+
+    def _export_csv(self):
+        """导出为CSV格式"""
+        if self.api.current_time_series is None:
+            QMessageBox.warning(self, "Warning", "No time series to export")
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export CSV", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not file_path:
+            return
+        try:
+            ts = self.api.current_time_series
+            # Stack all components: hx, hy, ex, ey
+            data = np.column_stack([ts["hx"], ts["hy"], ts["ex"], ts["ey"]])
+            header = "hx,hy,ex,ey"
+            np.savetxt(file_path, data, delimiter=",", header=header, comments="")
+            self.statusBar().showMessage(f"Exported to {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Export failed: {e}")
+
+    def _export_numpy(self):
+        """导出为NumPy格式"""
+        if self.api.current_time_series is None:
+            QMessageBox.warning(self, "Warning", "No time series to export")
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export NumPy", "", "NumPy Files (*.npy);;All Files (*)"
+        )
+        if not file_path:
+            return
+        try:
+            ts = self.api.current_time_series
+            # Save arrays with metadata
+            np.savez(
+                file_path,
+                hx=ts["hx"],
+                hy=ts["hy"],
+                ex=ts["ex"],
+                ey=ts["ey"],
+                sample_rate=ts["sample_rate"],
+                n_samples=ts["n_samples"],
+            )
+            self.statusBar().showMessage(f"Exported to {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Export failed: {e}")
+
+    def _save_project(self):
+        """保存项目"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project", "", "Project Files (*.json);;All Files (*)"
+        )
+        if not file_path:
+            return
+        try:
+            self.api.save_project(file_path)
+            self.statusBar().showMessage(f"Project saved to {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Save failed: {e}")
+
+    def _load_project(self):
+        """加载项目"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Project", "", "Project Files (*.json);;All Files (*)"
+        )
+        if not file_path:
+            return
+        try:
+            self.api.load_project(file_path)
+            # Update station list
+            self.station_list.clear()
+            for name in self.api.list_stations():
+                self.station_list.addItem(name)
+            # Update model display if model was loaded
+            if self.api.model is not None:
+                self.current_model_name = self.api.model.name
+                self._update_model_display()
+            self.statusBar().showMessage(f"Project loaded from {file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Load failed: {e}")
+
+    def _batch_run(self):
+        """批量运行合成"""
+        selected = [item.text() for item in self.station_list.selectedItems()]
+        if not selected:
+            QMessageBox.warning(self, "Warning", "Please select stations first")
+            return
+        try:
+            band = self.band_combo.currentText()
+            duration = self.duration_spin.value()
+
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setMaximum(len(selected))
+
+            def progress_callback(current, total, message):
+                self.progress_bar.setValue(current)
+                self.statusBar().showMessage(message)
+
+            results = self.api.batch_synthesize(
+                selected, band, duration, progress_callback=progress_callback
+            )
+            self.progress_bar.setVisible(False)
+            self.statusBar().showMessage(
+                f"Batch completed: {len(results)} stations processed"
+            )
+        except Exception as e:
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Error", f"Batch run failed: {e}")
 
     def _load_preset_model(self, name: str):
         """加载预设模型"""

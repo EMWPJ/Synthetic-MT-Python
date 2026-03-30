@@ -6,7 +6,7 @@ MT工作流配置模块
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, List, Dict
 
 
 # 物理常数
@@ -164,3 +164,85 @@ def get_default_processing_periods() -> np.ndarray:
         np.log10(config["period_min"]), np.log10(config["period_max"]), n_points
     )
     return periods
+
+
+# ============================================================================
+# 分段交替采集配置
+# ============================================================================
+
+BAND_MAP = {
+    "HIGH": "TS3",  # 2400Hz, 1-1000Hz
+    "MED": "TS4",  # 150Hz, 0.1-10Hz
+    "LOW": "TS5",  # 15Hz, 1e-6-1Hz
+}
+
+
+@dataclass
+class SegmentedAcquisitionConfig:
+    """分段交替采集配置"""
+
+    interval: int = 300  # 采集间隔(秒) - 高频/中频交替周期的一半
+    high_duration: int = 2  # 高频采集时长(秒)
+    med_duration: int = 16  # 中频采集时长(秒)
+    total_duration: float = 600.0  # 总采集时长(秒)
+
+    def __post_init__(self):
+        """验证配置参数"""
+        if self.interval <= 0:
+            raise ValueError("interval must be positive")
+        if self.high_duration <= 0:
+            raise ValueError("high_duration must be positive")
+        if self.med_duration <= 0:
+            raise ValueError("med_duration must be positive")
+        if self.total_duration <= 0:
+            raise ValueError("total_duration must be positive")
+
+    @property
+    def cycle_duration(self) -> int:
+        """完整周期时长 = interval * 2"""
+        return self.interval * 2
+
+    def generate_schedule(self) -> List[Dict]:
+        """
+        生成采集时间表
+
+        Returns:
+            List of dicts with keys: band, start, end, duration
+            例如: [{"band": "HIGH", "start": 0.0, "end": 2.0, "duration": 2.0}, ...]
+        """
+        schedule = []
+        current_time = 0.0
+
+        while current_time < self.total_duration:
+            # HIGH频段采集
+            high_end = current_time + self.high_duration
+            if high_end > self.total_duration:
+                high_end = self.total_duration
+            schedule.append(
+                {
+                    "band": "HIGH",
+                    "start": current_time,
+                    "end": high_end,
+                    "duration": high_end - current_time,
+                }
+            )
+            current_time += self.interval
+
+            if current_time >= self.total_duration:
+                break
+
+            # MED频段采集
+            med_end = current_time + self.med_duration
+            if med_end > self.total_duration:
+                med_end = self.total_duration
+            schedule.append(
+                {
+                    "band": "MED",
+                    "start": current_time,
+                    "end": med_end,
+                    "duration": med_end - current_time,
+                }
+            )
+            current_time += self.interval
+
+        return schedule
