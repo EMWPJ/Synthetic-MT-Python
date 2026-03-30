@@ -151,17 +151,24 @@ verify_processor:      PASS - FFT frequency detection
 verify_api_workflow:   PASS - Full workflow
 ```
 
-### Full Pipeline Test (Forward → Synthesis → Processing → Comparison)
+### Full Pipeline Test (Forward → Random Synthesis → Processing → Comparison)
+
+**Configuration**: `synthetic_periods=200` (segment length = 200 periods per frequency)
 
 | Model | Max rho_a Error | Mean rho_a Error | Max Phase Error | Mean Phase Error | Status |
 |-------|---------------|-----------------|-----------------|-----------------|--------|
-| uniform_100 | 0.93% | 0.30% | 0.39° | 0.10° | PASS |
-| uniform_1000 | 0.93% | 0.30% | 0.39° | 0.10° | PASS |
-| two_layer_hl | 1.14% | 0.35% | 0.48° | 0.12° | PASS |
-| two_layer_ll | 0.32% | 0.12% | 0.11° | 0.03° | PASS |
-| three_layer_hll | 0.60% | 0.24% | 0.21° | 0.06° | PASS |
+| uniform_100 | 0.89% | 0.22% | 0.43° | 0.08° | PASS |
+| uniform_1000 | 0.89% | 0.22% | 0.43° | 0.08° | PASS |
+| two_layer_hl | 0.88% | 0.28% | 0.50° | 0.12° | PASS |
+| two_layer_ll | 0.40% | 0.11% | 0.24° | 0.04° | PASS |
+| three_layer_hll | 0.67% | 0.19% | 0.31° | 0.08° | PASS |
 
-**Note**: Errors are due to FFT numerical precision. The random synthesis intentionally perturbs amplitude/phase per segment, simulating natural source variation. Larger errors (2-100%) are expected for random synthesis per the paper.
+**Note**: Random synthesis with `synthetic_periods=200` achieves <1% rho_a error. The segment length must be sufficient for good FFT spectral resolution. At 1000Hz with sample_rate=2400Hz:
+- `synthetic_periods=8`: segment_length=19 samples → 100%+ errors (FFT resolution too poor)
+- `synthetic_periods=100`: segment_length=240 samples → 2-2.4% errors
+- `synthetic_periods=200`: segment_length=480 samples → <1% errors (acceptable)
+
+The test tolerance is 2% for rho_a and 1° for phase.
 
 ### Generated Test Artifacts
 
