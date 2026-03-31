@@ -122,6 +122,16 @@ class MTWorkflowAPI:
             "zyx": impedance["Zyx"],
         }
 
+    def get_forward_results(self) -> Optional[Dict]:
+        """获取正演计算结果"""
+        if self.current_periods is None:
+            return None
+        return {
+            "periods": self.current_periods,
+            "app_resistivity": self.current_rho,
+            "phase": self.current_phase,
+        }
+
     # ========================================================================
     # 时间序列合成
     # ========================================================================
@@ -138,7 +148,7 @@ class MTWorkflowAPI:
 
         重要: 随机种子与时间绑定 - 确保相同时段产生相同的合成结果
         """
-        from synthetic_mt import ForwardSite, nature_magnetic_amplitude
+        from synthetic_mt import ForwardSite
 
         if self.forward_calc is None:
             raise RuntimeError("No model created. Run forward first.")
@@ -213,7 +223,7 @@ class MTWorkflowAPI:
         Returns:
             时间序列数据字典
         """
-        from synthetic_mt import ForwardSite, nature_magnetic_amplitude
+        from synthetic_mt import ForwardSite
         from synthetic_mt.domain.entities import EMFields
 
         # 获取测点数据
@@ -404,7 +414,7 @@ class MTWorkflowAPI:
             }
         """
         # Local import to avoid circular/relative import issues
-        from config import SegmentedAcquisitionConfig
+        from ..config import SegmentedAcquisitionConfig
 
         # Validate station exists (need fields from forward)
         if self.forward_calc is None:
