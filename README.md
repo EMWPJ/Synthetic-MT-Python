@@ -60,12 +60,13 @@ Synthetic-MT-Python/
 │   └── ...
 ├── examples/
 │   ├── test_synthetic.py    # Basic examples
-│   └── mt_workflow/         # 1D MT workflow (后端与界面分离架构)
+│   └── mt_workflow/         # 1D MT workflow (模块化架构)
 │       ├── backend/         # 后台算法核心
 │       │   ├── core.py      # 算法实现 (Model, Forward, Processor)
 │       │   ├── api.py       # API接口
 │       │   └── verify_all.py # 模块验证
-│       ├── gui_simple.py    # 简化版GUI (调用backend.api)
+│       ├── gui_simple.py    # 简化版GUI (单窗口, 调用backend.api)
+│       ├── gui_workflow.py  # 多标签页GUI (1D正演/合成/处理)
 │       ├── gui.py          # 旧版GUI
 │       └── ...
 ├── docs/                    # Documentation
@@ -79,14 +80,21 @@ Synthetic-MT-Python/
 ### 架构
 
 ```
-GUI (gui_simple.py)  →  API层 (backend/api.py)  →  算法核心 (backend/core.py)
+GUI (gui_workflow.py)  →  API层 (backend/api.py)  →  算法核心 (backend/core.py)
      │                         │                           │
-  用户界面                    接口                       MT1DModel
-  图表显示                  MTWorkflowAPI              MT1DForward
-  事件处理                  单例模式                   TimeSeriesSynthesizer
-                                                     TimeSeriesProcessor
-                                                     Model1DValidator
+   多标签页界面                接口                       MT1DModel
+   图表显示                  MTWorkflowAPI              MT1DForward
+   事件处理                  单例模式                   TimeSeriesSynthesizer
+                                                      TimeSeriesProcessor
+                                                      Model1DValidator
 ```
+
+### 两种GUI
+
+| GUI | 文件 | 描述 |
+|-----|------|------|
+| **多标签页GUI** | `gui_workflow.py` | 推荐使用，三标签页界面（1D正演/合成/数据处理） |
+| 简化版GUI | `gui_simple.py` | 单窗口界面，适合简单工作流 |
 
 ### 两种合成方法
 
