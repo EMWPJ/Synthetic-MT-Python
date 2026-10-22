@@ -12,8 +12,12 @@
 TBL/CLB/CLC 与标定全部内置，MT 与 AMT 各一套固定组合（同一 4360 仪器，
 采集参数不同；synthts/assets/ 与 synthts/assets/AMT/）——除模型文件外
 零外部依赖。其余八算法、噪声支路与 syscal_dll 引擎已移除。
+
+结束时向 stdout 追加一行机器可读摘要：SYNTHTS_SUMMARY {json}
+（仅 stdout，不写入 -log 文件；字段见 README/SKILL）。
 """
 import argparse
+import json
 import os
 import sys
 import time
@@ -21,7 +25,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from . import calib, synth
+from . import __version__, calib, synth
 from .model import load_site, densify_frequencies, resample_site_log, save_site
 from .phoenix_ts import write_time_series
 from .tbl import TBL, from_tdatetime, to_tdatetime
@@ -99,6 +103,7 @@ def main(argv=None):
             % (args.mode, len(args.model), args.periods, args.scale, dur))
 
         os.makedirs(args.out, exist_ok=True)
+        out_files = []                     # 登记全部输出文件，供 JSON 摘要
 
         tbl = TBL.load(tbl_path)
         sites = []
@@ -118,6 +123,7 @@ def main(argv=None):
                     dense_path = os.path.join(args.out, (site.name or 'site')
                                               + '_dense.XMLSITE')
                     save_site(site, dense_path)
+                    out_files.append(dense_path.replace('\\', '/'))
                     say('  dense : %s 加密 %d -> %d 频点（%.1f/倍频程, '
                         '场 log 域插值, 模型 %s）'
                         % (site.name, n_anchor, len(dense_freqs), args.dense,
@@ -175,6 +181,7 @@ def main(argv=None):
             tbl.set_str_field('FILE', site_name)
             tbl.set_str_field('SITE', site_name)
             tbl.save(f'{out_dir}{site_name}.TBL')
+            out_files.append(f'{out_dir}{site_name}.TBL')
             say('  输出  : %s%s.TBL' % (out_dir, site_name))
 
         for schema in schemas:
@@ -189,6 +196,7 @@ def main(argv=None):
             del site_k_list
             for k, ts in enumerate(ts_list):
                 path = write_time_series(ts, out_dir, tbl, site_names[k])
+                out_files.append(path)
                 n_samples = sum(len(s) for s in ts['channels'][0]) if ts['channels'] and ts['channels'][0] else 0
                 say('  synth : %s %s done (%.0f ms, segs=%d samples0=%d) -> %s'
                     % (site_names[k], schema['name'], (time.time() - t_seg) * 1000,
@@ -196,6 +204,21 @@ def main(argv=None):
                 ts_list[k] = None                # 逐测点释放（大数组）
             del ts_list
         say('DONE (%.1f s)' % (time.time() - t0))
+        # 机器可读摘要：仅 stdout（不进 -log），一行 JSON，供脚本/AI 代理解析
+        summary = {
+            'tool': 'synthts', 'version': __version__, 'mode': args.mode,
+            'models': args.model, 'sites': site_names,
+            'n_freqs': [len(site.get_frequencies(False)) for _, site in sites],
+            'schemas': [s['name'] for s in schemas],
+            'begin': btime_dt.isoformat(sep=' '),
+            'end': etime_dt.isoformat(sep=' '),
+            'dur_s': dur, 'periods': args.periods, 'scale': args.scale,
+            'rot': args.rot, 'seed': args.seed, 'dense': args.dense,
+            'out_dir': os.path.abspath(args.out),
+            'files': out_files, 'n_files': len(out_files),
+            'elapsed_s': round(time.time() - t0, 3),
+        }
+        print('SYNTHTS_SUMMARY ' + json.dumps(summary, ensure_ascii=False))
         return 0
     except Exception as e:
         say('ERROR: %s' % e)
