@@ -37,6 +37,9 @@ THICK = [300.0, 3000.0]           # layer thicknesses (m)
 ANCHORS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1]
 DENSE, DUR, PERIODS, SEED, SCALE = 2.0, 3600.0, 64, 42, 10.0
 H0 = 0.02                         # source magnetic field amplitude (A/m)
+# Hz 展示信号：纯 1D 的垂直磁场恒为零（Tzx=0），此处给 Hz_p = 0.05·Hx_p 的
+# 弱倾子式分量，让五通道在图中都可见（不影响 Z 的合成与验证）
+TIPPER = 0.05
 # 论文原理（Wang et al. 2023）：合成中每个通道都同时含有两个极化源的信号，
 # 两极化各自独立分窗、独立强度（引擎侧 pol1 幅值~N(1,1)、pol2~U(0,2)，段长
 # 与相位独立抽签），叠加产生极化方向随时间的变化。因此模型的两极化必须
@@ -83,7 +86,8 @@ def build_model(path):
                        ('Ex2', e2[0]), ('Ey2', e2[1]),
                        ('Hx2', h2[0]), ('Hy2', h2[1])):
             lines.append('    <%s>%s</%s>' % (tag, cstr(v), tag))
-        lines.append('    <Hz1>1e-6,0</Hz1><Hz2>1e-6,0</Hz2>')
+        hz1, hz2 = TIPPER * h1[0], TIPPER * h2[0]
+        lines.append('    <Hz1>%s</Hz1><Hz2>%s</Hz2>' % (cstr(hz1), cstr(hz2)))
         lines.append('  </Fields>')
     lines.append('</Site>')
     Path(path).write_text(chr(10).join(lines) + chr(10), encoding='utf-8')
@@ -98,7 +102,8 @@ def _stack(ax, ts_path, fs_hint, n_show, title):
         sd = float(x.std()) or 1.0
         ax.plot(t, (x - x.mean()) / sd + 3.0 * (4 - c), lw=0.6, color='k')
     ax.set_yticks([3.0 * k for k in range(5)])
-    ax.set_yticklabels(['Ex', 'Ey', 'Hx', 'Hy', 'Hz'])
+    # 刻度按升序配标签：轨迹偏移为 Ex=12(顶)...Hz=0(底)，标签须倒序贴
+    ax.set_yticklabels(['Hz', 'Hy', 'Hx', 'Ey', 'Ex'])
     ax.set_title(title)
     ax.set_xlim(0, t[-1])
 
