@@ -330,7 +330,7 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
         ex = ch[0][k] * r[0][k]
         ey = ch[1][k] * r[1][k]
         hmat = np.column_stack([hx, hy])
-        if np.linalg.matrix_rank(hmat) < 2:
+        if hmat.shape[0] < 2 or np.linalg.matrix_rank(hmat) < 2:
             continue
         zxx, zxy = np.linalg.lstsq(hmat, ex, rcond=None)[0]
         zyx, zyy = np.linalg.lstsq(hmat, ey, rcond=None)[0]
