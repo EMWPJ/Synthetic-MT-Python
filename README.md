@@ -208,14 +208,14 @@ Draws two figures in the style of Wang et al. (2023) for a three-layer demo mode
 | 10 days × 10 sites (coherently paired) | 127 s | — |
 | 72 h × 1 site | — | ~121 s (TS5 band-synthesis FFTs dominate) |
 
-**Recovered accuracy** (processed with the built-in `mtprocess`, dense grid,
-vs the theoretical impedance — by frequency band):
+**Recovered accuracy** (v2 noise engine, 72 h record, frequency-binned
+processing, vs the theoretical impedance):
 
 | Band | ρa max rel. error | Note |
 |---|---|---|
-| 0.35 – 320 Hz | < 1 % (typ. 3–8 ×10⁻³) | within window-resolution accuracy |
-| 0.10 – 0.35 Hz | ~2×10⁻² (floor) | window-resolution physical floor: the 8-period processing window averages Z across its ±0.32-octave main lobe; converges as 1/√(dur·f) with longer records |
-| phase (all bands) | median 0.011° | far inside 1° |
+| 1 – 320 Hz (validation band) | **< 1 %** (median 1.0×10⁻⁴) | all 2842 dense-grid bins |
+| phase (validation band) | median 0.011° | far inside 1° |
+| 0.10 – 0.35 Hz | ~2×10⁻² floor | window-resolution + burst-statistics floor at 8 h records; converges as 1/√(dur·f) — < 1 % at 0.1 Hz needs ~14.5 days of continuous record (standard MT low-frequency time-accuracy law) |
 
 lines numbers are the v1 engine (sparse comb matched to the processing window);
 noise runs are cost-decoupled from the model frequency count (anchor-count
