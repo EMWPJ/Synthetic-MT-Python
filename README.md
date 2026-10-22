@@ -181,12 +181,14 @@ python tools/plot_demo.py        # writes ./plot_out/fig_time_series.png + fig_r
 Draws two figures in the style of Wang et al. (2023) for a three-layer demo model
 (100/10/1000 Ω·m, H-type curve):
 
-- `fig_time_series.png` — four-channel stacked traces at the 2400/150/15 Hz sampling
-  rates plus the amplitude spectrum across the dense grid (paper Fig 5; a 1D model
-  has no vertical magnetic field, so Hz is not drawn);
-- `fig_rho_phase.png` — apparent resistivity and phase estimated from the synthetic
-  series by least squares vs the 1D forward theory (paper Fig 6 style: blue
-  circles line = theory, red dashed crosses = processed, Period axis).
+- `fig_time_series.png` — channel x samplerate panel grid (rows Ex/Ey/Hx/Hy,
+  columns 2400/150/15 Hz; a 1D model has no vertical magnetic field, so Hz is
+  not drawn) plus a dual-axis PSD panel (E fields left, H fields right, one
+  curve family per samplerate) — paper Fig 5 layout;
+- `fig_rho_phase.png` — apparent resistivity and phase estimated from the
+  synthetic series by least squares vs the 1D forward theory, on a reversed
+  log frequency axis (high frequency left): theoretical black lines, synthetic
+  XY as red circles and YX as blue triangles — paper Fig 6 style.
 
 ## Performance (reference: MT mode, dense=4, periods=64, NVMe)
 

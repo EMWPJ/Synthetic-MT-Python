@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Paper-style plot demo (Wang et al. 2023, Figs 5-6 style).
+"""Paper-style plot demo (Wang et al. 2023, Figs 5-6 as drawn by the author).
 
-Synthesizes one layered-model site, then draws two figures (fixed output
-directory ./plot_out under the current working directory):
+Synthesizes one layered-model site, then draws two figures following the
+author's own GMT scripts (Figure 5.ps1 / Figure 6.ps1):
 
-  1. fig_time_series.png — four-channel stacked traces at the three sampling rates
-     2400/150/15 Hz (paper Fig 5A-C style; a 1D model has no vertical magnetic
-     field, so Hz is not drawn) plus the amplitude spectrum across the
-     dense grid (paper Fig 5D);
-  2. fig_rho_phase.png — apparent resistivity and phase estimated from the synthetic
-     time series (least squares) vs the 1D forward theory (paper Fig 6 style:
-     blue circles line = theory, red dashed crosses = processed, Period axis).
+  1. fig_time_series.png — channel x samplerate panel grid (rows Ex/Ey/Hx/Hy,
+     columns 2400/150/15 Hz; a 1D model has no vertical magnetic field, so Hz
+     is not drawn), each panel with its own amplitude axis, plus a PSD panel
+     (d) with E fields on the left axis and H fields on the right axis, one
+     curve family per samplerate (paper Fig 5);
+  2. fig_rho_phase.png — apparent resistivity and phase vs FREQUENCY (log axis
+     reversed: high frequency left): theoretical black lines, synthetic values
+     as open symbols (XY red circles, YX blue triangles) (paper Fig 6).
 
 Usage (repo root; needs the plotting extra: pip install -e ".[plot]"):
   python tools/plot_demo.py
@@ -23,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from synthts import mtprocess
+from synthts import calib, mtprocess
 from synthts.cli import main as synth_main
 from synthts.model import load_site
 
@@ -33,7 +34,7 @@ OUT_DIR = 'plot_out'
 SITE = 'MTL'                      # layered demo site (H-type curve)
 RES = [100.0, 10.0, 1000.0]       # layer resistivities (Ohm m), last entry = half-space
 THICK = [300.0, 3000.0]           # layer thicknesses (m)
-# 锚点下限 0.1Hz：更低频在 dur=3600s 下每极化仅 1~2 个分段（64 周期分段长
+# 锚点下限 0.1Hz：更低频在 dur=3600s 下每极化仅 1~2 个分段（128 周期分段长
 # 6400s@0.01Hz），随机幅相无法跨段平均，会重现低频失衡
 ANCHORS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1]
 DENSE, DUR, PERIODS, SEED, SCALE = 10.0, 3600.0, 128, 42, 10.0
@@ -41,14 +42,15 @@ DENSE, DUR, PERIODS, SEED, SCALE = 10.0, 3600.0, 128, 42, 10.0
 # 段长同步 128 周期——加密越密，8 周期处理窗主瓣内的邻频段越多
 # （10/oct 时 +/-0.32 倍频程约 6 个），散射随段长线性下降，需更长分段抵消
 H0 = 0.02                         # source magnetic field amplitude (A/m)
-# 论文原理（Wang et al. 2023）：合成中每个通道都同时含有两个极化源的信号，
-# 两极化各自独立分窗、独立强度（引擎侧 pol1 幅值~N(1,1)、pol2~U(0,2)，段长
-# 与相位独立抽签），叠加产生极化方向随时间的变化。因此模型的两极化必须
-# "斜"且"椭圆"：若轴对齐（h1=[1,0]、h2=[0,1]），Ex 只剩极化2、Ey 只剩极化1，
-# 既丢掉这些通道的极化方向变化，低频 1~2 个分段时单次强度抽签还会把该通道
-# 的主频段整段压没（曾致 TS5 的 Ex 看似噪声、窗口谱比 Ex/Ey 塌到 0.04）。
-POLAR_THETA = 30.0                # 极化旋转角（度）
-POLAR_ELLIP = 0.5                 # 极化2短轴/长轴比（均衡两极化态，LSQ 良态）
+
+CHANNELS = ('Ex', 'Ey', 'Hx', 'Hy')
+# 论文 Fig 5 的三个采样率族：TS 档、图例文字、灰度、时间窗(s)、x 轴标签
+FAMILIES = (
+    ('2400 Hz', 'TS3', '0.0', 2.0, 'Time (s)'),
+    ('150 Hz', 'TS4', '0.35', 16.0, 'Time (s)'),
+    ('15 Hz', 'TS5', '0.65', 3600.0, 'Time (h)'),
+)
+CH_LS = ('-', '--', ':', '-.')    # 通道线型（族用灰度区分）
 
 
 def z1d(freq):
@@ -68,7 +70,7 @@ def cstr(z):
 
 def build_model(path):
     """XMLSITE with two rotated elliptical source polarizations and E = Z(1D) · H."""
-    th = math.radians(POLAR_THETA)
+    th = math.radians(30.0)
     c, s = math.cos(th), math.sin(th)
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<Site name="%s" X="100.5" Y="30.2">' % SITE,
@@ -77,7 +79,7 @@ def build_model(path):
         z = z1d(f)
         zmat = np.array([[0.0, z], [-z, 0.0]])
         h1 = np.array([complex(c, 0.0), complex(s, 0.0)]) * H0
-        h2 = np.array([complex(-s, 0.0), complex(POLAR_ELLIP * c, 0.0)]) * H0
+        h2 = np.array([complex(-s, 0.0), complex(0.5 * c, 0.0)]) * H0
         e1, e2 = zmat @ h1, zmat @ h2
         lines.append('  <Fields frequency="%r" isNoise="False">' % f)
         lines.append('    <Zxx>0,0</Zxx><Zxy>0,0</Zxy><Zyx>0,0</Zyx><Zyy>0,0</Zyy>'
@@ -94,20 +96,31 @@ def build_model(path):
     Path(path).write_text(chr(10).join(lines) + chr(10), encoding='utf-8')
 
 
-def _stack(ax, ts_path, fs_hint, n_show, title):
-    """四通道堆叠（Ex/Ey/Hx/Hy）；1D 模型的 Hz 恒为零，不绘制。"""
-    sr, data = mtprocess.read_ts(ts_path)
-    fs = sr or fs_hint
-    t = np.arange(n_show) / fs
-    for c, name in enumerate(('Ex', 'Ey', 'Hx', 'Hy')):
-        x = data[c][:n_show]
-        sd = float(x.std()) or 1.0
-        ax.plot(t, (x - x.mean()) / sd + 3.0 * (3 - c), lw=0.6, color='k')
-    ax.set_yticks([3.0 * k for k in range(4)])
-    # 刻度按升序配标签：轨迹偏移为 Ex=9(顶)...Hy=0(底)，标签须倒序贴
-    ax.set_yticklabels(['Hy', 'Hx', 'Ey', 'Ex'])
-    ax.set_title(title)
-    ax.set_xlim(0, t[-1])
+def _family_psd(out_dir, band, grid):
+    """一个采样率族的四通道 PSD（物理单位，标定同 mtprocess）。
+
+    E: count --responds--> V/m -> mV/km (x1e3)；H: count --responds--> A/m
+    -> nT (x MU0 x 1e9)。PSD = 2<|X|^2>/(fs*U)，U=sum(w^2)（加窗周期图）。
+    """
+    sr, data = mtprocess.read_ts(os.path.join(out_dir, '%s.%s' % (SITE, band)))
+    fs = float(sr)
+    out = {c: ([], []) for c in range(4)}
+    for f in grid:
+        n = int(round(mtprocess.WINDOW_PERIODS * fs / f))
+        if n < 8 or len(data[0]) < n:
+            continue
+        w = np.hanning(n)
+        u = float((w * w).sum())
+        r = calib.compute_responds([f])
+        for c in range(4):
+            x = mtprocess.window_dft(data[c], fs, f)
+            if not len(x):
+                continue
+            scale = r[c][0] * (1e3 if c < 2 else 1e9)
+            psd = 2.0 * np.mean(np.abs(x * scale) ** 2) / (fs * u)
+            out[c][0].append(f)
+            out[c][1].append(psd)
+    return {c: (np.array(v[0]), np.array(v[1])) for c, v in out.items()}
 
 
 def plot_timeseries(out_dir, dense_model, png):
@@ -115,36 +128,66 @@ def plot_timeseries(out_dir, dense_model, png):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    _stack(axes[0, 0], os.path.join(out_dir, '%s.TS3' % SITE), 2400,
-           2400, '(A) Time series, 2400 Hz')
-    _stack(axes[0, 1], os.path.join(out_dir, '%s.TS4' % SITE), 150,
-           1500, '(B) Time series, 150 Hz')
-    _stack(axes[1, 0], os.path.join(out_dir, '%s.TS5' % SITE), 15,
-           1500, '(C) Time series, 15 Hz')
+    grid = sorted(load_site(dense_model).get_frequencies(False))
+    psds = {band: _family_psd(out_dir, band, grid) for _, band, _, _, _ in FAMILIES}
 
-    ax = axes[1, 1]
-    freqs = load_site(dense_model).get_frequencies(False)
-    for c, name in ((0, 'Ex'), (1, 'Ey'), (2, 'Hx'), (3, 'Hy')):
-        amp = []
-        for f in freqs:
-            picked = mtprocess.pick_ts_file(f, out_dir, SITE)
-            if picked is None:
-                amp.append(np.nan)
+    fig = plt.figure(figsize=(10.5, 6.6))
+    gs = fig.add_gridspec(4, 5, hspace=0.45, wspace=0.42)
+    cols = [
+        ('TS3', 4800, 1.0, '(a) Time Series (2400 Hz)', 'Time (s)'),
+        ('TS4', 2400, 1.0, '(b) Time Series (150 Hz)', 'Time (s)'),
+        ('TS5', 54015, 3600.0, '(c) Time Series (15 Hz)', 'Time (h)'),
+    ]
+    for c, ch in enumerate(CHANNELS):
+        for k, (band, n_show, t_scale, title, xlab) in enumerate(cols):
+            ax = fig.add_subplot(gs[c, k])
+            sr, data = mtprocess.read_ts(os.path.join(out_dir, '%s.%s' % (SITE, band)))
+            fs = float(sr)
+            n = min(n_show, len(data[c]))
+            t = np.arange(n) / fs / t_scale
+            ax.plot(t, data[c][:n], lw=0.5, color='k')
+            if k == 0:
+                ax.set_ylabel('%s (count)' % ch)
+            else:
+                ax.set_yticklabels([])
+            if c == 3:
+                ax.set_title(title, fontsize=9)
+                ax.set_xlabel(xlab)
+            ax.grid(True, lw=0.3, ls=':', alpha=0.5)
+
+    # (d) PSD：E 场挂左轴、H 场挂右轴；族=灰度、通道=线型（论文 Fig 5d）
+    ax_e = fig.add_subplot(gs[0:4, 3:5])
+    ax_h = ax_e.twinx()
+    fam_color = {lab: col for lab, _, col, _, _ in FAMILIES}
+    for lab, band, col, _, _ in FAMILIES:
+        for c in range(4):
+            f_arr, p_arr = psds[band][c]
+            if not len(f_arr):
                 continue
-            _, fs, data, _ = picked
-            x = mtprocess.window_dft(data[c], fs, f)
-            amp.append(float(np.median(np.abs(x))) if len(x) else np.nan)
-        ax.loglog(freqs, amp, lw=1.0, label=name)
-    ax.set_title('(D) Amplitude spectrum (windowed DFT)')
-    ax.set_xlabel('Frequency (Hz)')
-    ax.set_ylabel('Amplitude')
-    ax.legend(fontsize=8)
+            target = ax_e if c < 2 else ax_h
+            target.loglog(f_arr, p_arr, CH_LS[c], color=col, lw=1.0)
+    ax_e.set_xlim(400, 0.01)
+    ax_e.set_xlabel('Frequency (Hz)')
+    ax_e.set_ylabel('E Fields PSD ((mV/km)$^2$/Hz)')
+    ax_h.set_ylabel('H Fields PSD (nT$^2$/Hz)')
+    ax_e.set_title('(d) PSD of time series', fontsize=9)
+    ax_e.grid(True, which='both', lw=0.3, ls=':', alpha=0.5)
+    fam_handles = [plt.Line2D([], [], color=fam_color[lab], lw=1.2, label=lab)
+                   for lab, _, _, _, _ in FAMILIES]
+    ch_handles = [plt.Line2D([], [], color='k', ls=ls, lw=1.2, label=ch)
+                  for ch, ls in zip(CHANNELS, CH_LS)]
+    leg1 = ax_e.legend(handles=fam_handles, loc='upper left', fontsize=7, title='Samplerate')
+    leg1.get_title().set_fontsize(7)
+    ax_h.legend(handles=ch_handles, loc='lower left', fontsize=7)
 
-    axes[1, 0].set_xlabel('Time (s)')
     fig.tight_layout()
     fig.savefig(png, dpi=150)
     plt.close(fig)
+
+
+def _fold_phase(deg):
+    """MT 惯例：相位折叠到 (-90, 90]（YX 与 XY 相差 180°）。"""
+    return (deg + 90.0) % 180.0 - 90.0
 
 
 def plot_rho_phase(rows, png):
@@ -153,25 +196,37 @@ def plot_rho_phase(rows, png):
     import matplotlib.pyplot as plt
 
     freqs = np.array([r[0] for r in rows])
-    per = 1.0 / freqs
     w = 2.0 * math.pi * freqs
-    zxy_e = np.array([r[1][0, 1] for r in rows])
-    zxy_t = np.array([r[2][0, 1] for r in rows])
-    rho_e, rho_t = np.abs(zxy_e) ** 2 / (MU0 * w), np.abs(zxy_t) ** 2 / (MU0 * w)
-    ph_e, ph_t = np.degrees(np.angle(zxy_e)), np.degrees(np.angle(zxy_t))
+    comp = {  # (estimate, theory) per component, XY = [0,1], YX = [1,0]
+        'XY': ([r[1][0, 1] for r in rows], [r[2][0, 1] for r in rows]),
+        'YX': ([r[1][1, 0] for r in rows], [r[2][1, 0] for r in rows]),
+    }
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6.4), sharex=True)
+    sym = {'XY': ('o', 'red'), 'YX': ('^', 'blue')}
+    for name, (est, th) in comp.items():
+        m, col = sym[name]
+        rho_t = np.abs(np.array(th)) ** 2 / (MU0 * w)
+        ph_t = _fold_phase(np.degrees(np.angle(np.array(th))))
+        ls = '-' if name == 'XY' else '--'
+        ax1.loglog(freqs, rho_t, 'k' + ls, lw=1.0,
+                   label='Theoretical ' + name)
+        ax2.semilogx(freqs, ph_t, 'k' + ls, lw=1.0)
+        rho_e = np.abs(np.array(est)) ** 2 / (MU0 * w)
+        ph_e = _fold_phase(np.degrees(np.angle(np.array(est))))
+        ax1.plot(freqs, rho_e, m, mfc='none', mec=col, ms=4.5,
+                 label='Synthetic ' + name)
+        ax2.plot(freqs, ph_e, m, mfc='none', mec=col, ms=4.5)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 9), sharex=True)
-    ax1.loglog(per, rho_t, 'b-o', markersize=4, label='Theory')
-    ax1.loglog(per, rho_e, 'r--x', markersize=5, label='Synthetic (LSQ)')
-    ax1.set_ylabel(r'App. Resistivity ($\Omega \cdot m$)')
-    ax1.legend()
-    ax1.grid(True, which='both', alpha=0.3)
-    ax2.semilogx(per, ph_t, 'b-o', markersize=4, label='Theory')
-    ax2.semilogx(per, ph_e, 'r--x', markersize=5, label='Synthetic (LSQ)')
-    ax2.set_xlabel('Period (s)')
-    ax2.set_ylabel('Phase (deg)')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    ax1.set_ylim(1, 1000)
+    ax1.set_ylabel(r'$\rho_a$ ($\Omega\cdot$m)')
+    ax1.legend(fontsize=8, ncol=2)
+    ax2.set_ylim(0, 90)
+    ax2.set_yticks([0, 45, 90])
+    ax2.set_ylabel(r'$\phi$ ($^\circ$)')
+    ax2.set_xlabel('Frequency (Hz)')
+    for ax in (ax1, ax2):
+        ax.set_xlim(400, 0.01)          # 频率轴反向：高频在左（MT 惯例）
+        ax.grid(True, which='both', lw=0.3, ls=':', alpha=0.5)
     fig.tight_layout()
     fig.savefig(png, dpi=150)
     plt.close(fig)
@@ -186,8 +241,8 @@ def main():
 
     model = os.path.join(out_dir, '%s.XMLSITE' % SITE.lower())
     build_model(model)
-    print('=== 合成层状模型 %s (rho=%s, h=%s, %d 锚点 %g~%g Hz) ==='
-          % (SITE, RES, THICK, len(ANCHORS), ANCHORS[-1], ANCHORS[0]))
+    print('=== 合成层状模型 %s (rho=%s, h=%s, %d 锚点 %g~%g Hz, dense=%g/倍频程) ==='
+          % (SITE, RES, THICK, len(ANCHORS), ANCHORS[-1], ANCHORS[0], DENSE))
     rc = synth_main(['-model', model, '-out', out_dir, '-dur', str(DUR),
                      '-periods', str(PERIODS), '-seed', str(SEED),
                      '-scale', str(SCALE), '-dense', str(DENSE)])
