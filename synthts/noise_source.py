@@ -209,9 +209,12 @@ class NoiseSource:
                     n_dropped += 1
 
         # ── 每记录：L1 + L2 + L3 → 源谱 P̂（跨测点共享）→ 逐站渲染 ────
+        # 三层均为每 Hz 单位谱密度口径：白噪的每样本方差取 fs（L1 直取、
+        # L2 经带掩模继承、L3 事件以 √(α3·fs) 折算）——跨采样档重叠频段的
+        # 物理谱密度一致（R2c② 合同；曾漏乘 √fs 致 TS3 的 L2 份额 ~4%）
         Ts = [render_fft.transfer_matrix(s, freqs) for s in site_list]
         amp_l1 = math.sqrt(self.alpha1 * sr0)
-        amp_l2 = math.sqrt(self.alpha2 / self._eg2)
+        amp_l2 = math.sqrt(self.alpha2 * sr0 / self._eg2)
         a_ref_ev = math.sqrt(self.alpha3 * sr0)
         masks = {c: bands_mod.band_amplitude(freqs, c, self.band_octave)
                  for c in centers}

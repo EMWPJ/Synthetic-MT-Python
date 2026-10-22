@@ -159,7 +159,7 @@ def test_gate6_psd_shape(tmp_path):
         hx2 = interp_log_complex(af, scaled['hx2'], [f])[0]
         ref = abs(hx1) ** 2 + abs(hx2) ** 2
         d10lg.append((est, ref))
-        k_eff = max(k_eff, int(0.75 * len(x)))
+        k_eff = max(k_eff, int(0.95 * len(x)))   # 功率相关 ρ=c²=1/36 → 膨胀 1+2ρ≈5.6%
     est_a = np.array([a for a, _ in d10lg])
     ref_a = np.array([b for _, b in d10lg])
     scale = np.median(est_a / ref_a)                    # 单一比例因子（-scale 等）
