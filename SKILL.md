@@ -86,9 +86,10 @@ pip install -e ".[plot]"     # once, adds matplotlib
 python tools/plot_demo.py    # writes ./plot_out/fig_time_series.png + fig_rho_phase.png
 ```
 
-Layered 1D demo model; four-channel traces at 2400/150/15 Hz, amplitude spectrum,
-and apparent resistivity/phase (LSQ) vs theory (b-o theory line, r--x processed,
-Period axis).
+Layered 1D demo model; channel x samplerate panel grid (Ex/Ey/Hx/Hy at
+2400/150/15 Hz) with a dual-axis PSD panel, and apparent resistivity/phase
+(LSQ) vs theory on a reversed log frequency axis (theory = black lines;
+synthetic XY = red circles, YX = blue triangles).
 
 ## Behaviour notes
 
