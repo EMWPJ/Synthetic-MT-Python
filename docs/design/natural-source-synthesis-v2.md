@@ -3,10 +3,10 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `discuss/natural-source-synthesis` |
-| 状态 | **评审稿 R1**（R0 三方评审后主编修订版） |
+| 状态 | **评审稿 R2（终稿候选）**（R1 对抗性终审后主编轻量修订；终审结论：核心方案 (a′) 通过，无 BLOCKER） |
 | 日期 | 2026-10-22 |
 | 起草 | §2 地球物理随机过程代理；§3–4 信号处理工程代理；§5–7 验证工程代理；§0/§1/§8 主编 |
-| 评审记录 | R0 主编合成 → **R1 三方评审（地球物理 18 项 / 信号处理 16 项 / 工程 15 项，去重后 4 BLOCKER + ~17 MAJOR + ~21 MINOR，全部处置见修订摘要）+ 主编修订（本文）** → R2 对抗性终审 → 作者定夺 |
+| 评审记录 | R0 三方起草合成 → R1 三方评审（49 项，4 BLOCKER）+主编大修 → **R2 对抗性终审（11 项：0 BLOCKER/5 MAJOR/6 MINOR，全部落实）+主编轻量修订（本文，终稿候选）** → 作者定夺 |
 
 ## R1 修订摘要（评审处置）
 
@@ -18,6 +18,8 @@
 4. **突发时标不可实现**（帧内常数增益把 <hop 的高频突发完全抹除；T̄=64 周期@10kHz=6.4ms ≪ hop 10.9s）→ (a′) 中包络在**时域逐样本**施加，突发分辨率=采样间隔，无 hop 量化；约束改为物理下限"段长 ≥ ~10 周期（带宽相关时间）"。
 
 MAJOR 类要点处置：谱连续闸门⑤加斜率归一+自适应阈值+过渡区剔除+L1-only 模式（R1-3/4）；KS 检验改 Monte-Carlo 复合参照+估计器自洽口径（R1-5/6）；功率定标锚定均值并预除 $E[g^2]$（R1-7）；L2 增加可选跨带公共慢变因子 $\gamma(t)$（R1-8）；screen_windows 对噪声源的行为改正（通过率≈3.9%，加显式旁路开关，R1-9）；范围声明"仪器/人文噪声不在 v2.0"（R1-10）；responds 阶跃改一阶主瓣混叠公式+近界频点标记（R2-5）；N/内存/FLOP 按真实拼接轴全面重算（R2-6/8、R3-10/11）；逐位复现承诺收窄为同机同线程并记录 BLAS（R2-7）；参数面改预设+参数文件（R3-3）；v2.0 默认切换配套清单（R3-7）；SourceProtocol 接口草案与逐里程碑验收命令（R3-8）；L3 事件占空比语义（R3-9）。MINOR 类全部吸收（DOF 折减 25%、Q 因子 √2、σ_g 文献链条降级为占位值、FLR/D(t)/bin0-Nyquist/带数表等）。
+
+**R2 终审（对抗性）**：核心方案 (a′) 通过——按记录独立噪声×全局包络的统计闭合、跨缝 E=ZH 精确性、FLOP/内存/参数复算均经验证；抽查 10 处 R1 处置全部真实落地；0 BLOCKER。11 项意见全部落实：M1 验收命令矛盾（闸门④引擎自适应**前移 M1**）、主公式补 $\gamma$ 项并以"实现实测均值"定义 $E[g^2\gamma^2]$、③在 L2 下的方差膨胀 $\exp(4\sigma_g^2)$ 折算与标度律自变量改记录数、§3.0 三处数字修正（TS2 1h=60 记录、TS5 Δf=3.86e-6Hz、下截系数）、M1 派工三项补全（bypass_screen / cost_bench / golden 分桶机制）、⑦(b) 限连续档、$f_0$=1Hz 入参数表、⑤估计器符号定义、`-source-params` 排除 seed/起点、②预期收紧 <1e-4、包络逐带流式约束。
 
 ---
 
@@ -57,7 +59,9 @@ $$X_c(t)=\sum_{p=1,2}C_{c,p}(f)\cdot P_p(t),\qquad c\in\{E_x,E_y,H_x,H_y,H_z\}$$
 
 映射按 bin 表示：$\tilde X_c[k]=\sum_{p=1,2}T_{c,p}(f_k)\,\tilde P_p[k]$。总源为三层独立叠加（**平均功率**权重 $\alpha_1+\alpha_2+\alpha_3=1$，$\alpha_2$ 已预除 $E[g^2]$ 使合同锚定均值 PSD）：
 
-$$P_p(t)=\sqrt{\alpha_1}\,w_p(t)\;+\;\sqrt{\tfrac{\alpha_2}{E[g^2]}}\sum_b g_{b,p}(t)\,n_{b,p}(t)\;+\;\sqrt{\alpha_3}\sum_e a_{e,p}\,\psi_e(t)$$
+$$P_p(t)=\sqrt{\alpha_1}\,w_p(t)\;+\;\sqrt{\tfrac{\alpha_2}{E[g^2\gamma^2]}}\,\gamma(t)\sum_b g_{b,p}(t)\,n_{b,p}(t)\;+\;\sqrt{\alpha_3}\sum_e a_{e,p}\,\psi_e(t)$$
+
+其中 $E[g^2\gamma^2]$ 取**实现实测均值**（含 cross-fade 的段增益均方与 $\gamma$ 均方，与闸门⑦的 Monte-Carlo 参照同构造——不用解析 $\exp(\sigma_g^2)$，两者差数个百分点；R2 修订）。
 
 - **L1 连续谱底**：$w_p(t)$ 为单位 PSD 宽带白噪声。谱形完全由映射上色：$|H|$ PSD $\propto B_{\rm natural}^2(f)$、$|E|$ PSD $\propto|Z|^2B_{\rm natural}^2$。任意频点 PSD 严格非零。
 - **L2 分带突发**：带中心 $f_b=f_0\,2^{b/2}$（½ 倍频程间距）。带掩模 $A_b(f)$ 定义在 $\log_2 f$ 域的**幅度**升余弦：$|\log_2(f/f_b)|\le 1/8$ 平坦=1，$1/8<|\cdot|\le 3/8$ 与相邻带**幅度**互补（相邻对取 $\cos/\sin$），满足**功率**分割恒等式 $\sum_b|A_b(f)|^2=1$（R1 修正：v0 的 cos²/sin² 给出 cos⁴+sin⁴∈[0.5,1]，带交有 −3dB 凹陷）。$n_{b,p}=\mathrm{IFFT}(A_b\,\hat w_{b,p})$ 为带内单位 PSD 滤波白噪声；带相关时间 $\tau_b\approx1/(0.35f_b)\approx3$ 周期。
@@ -72,6 +76,7 @@ $$P_p(t)=\sqrt{\alpha_1}\,w_p(t)\;+\;\sqrt{\tfrac{\alpha_2}{E[g^2]}}\sum_b g_{b,
 | 符号 | 含义 | 默认 | 合理范围 | 依据 | 标定来源 |
 |---|---|---|---|---|---|
 | $R$ | 带中心间距 | ½ oct | ⅓–1 oct | 源能量在倍频程尺度缓变 | 实测频谱倍频程平滑度 |
+| $f_0$ | 带网格基准 | 1 Hz | — | 全档共享同一带网格（$f_b=f_0\,2^{b/2}$）；各档取 $f_b\in(f_{\rm lo}^{\rm 截},\ 0.4\,sr\cdot2^{-3/8}]$ 的带（R2 补） | 实现参数 |
 | $\bar T_b$ | 平均突发时长 | 64 周期 | 16–256 周期（下限 10） | "带宽信号持续一段时间"；Pc 持续 min–h，AMT 突发 s–min | 实测带通包络段长分布 |
 | $\sigma_D$ | 段长 LN σ（ln 单位） | 0.5 | 0.25–1.0 | 突发时长跨一个量级 | 同上 |
 | $\sigma_g$ | 段增益 LN σ | 6 dB（**占位值**） | 3–10 dB | 雷电返击电流 LN σ≈5.3dB 经传播/多回击叠加后趋轻——文献链条间接，以 §5.4 实测标定为准 | 实测带内包络幅度直方图 |
@@ -119,7 +124,7 @@ Gabor 原子 $\psi_e(t)=e^{-t^2/2\tau_e^2}\cos(2\pi f_{c,e}t+\varphi_e)$，rms �
 
 ### 3.0 关键代码事实（R1 依据三方评审实测修正）
 
-内置 TBL 实测（`TBL.load`）：MT：HSMP=300、L3NS=2、L4NS=8；AMT：HSMP=30、L2NS=4。因此窗口档**记录长**：TS2=0.4s（9600 样本@24kHz，AMT）、TS3=2s（4800@2400）、TS4(MT)=8s（1200@150）；连续档：TS5 整段、AMT-TS4 整段。**v0 的"TS3 记录 60s"是事实错误**，据此的一切帧长/污染份额推导作废。拼接轴长度：TS3 72h=432×4800=2.07e6；TS5 72h=3.888e6；TS2 1h(AMT)=2×9600=1.92e4。
+内置 TBL 实测（`TBL.load`）：MT：HSMP=300、L3NS=2、L4NS=8；AMT：HSMP=30、L2NS=4。因此窗口档**记录长**：TS2=0.4s（9600 样本@24kHz，AMT）、TS3=2s（4800@2400）、TS4(MT)=8s（1200@150）；连续档：TS5 整段、AMT-TS4 整段。**v0 的"TS3 记录 60s"是事实错误**，据此的一切帧长/污染份额推导作废。拼接轴长度：TS3 72h=432×4800=2.07e6；TS5 72h=3.888e6（整轴 Δf=3.86e-6Hz）；TS2 1h(AMT)=60×9600=5.76e5（interval=30s，间隙 59.6s）。
 
 ### 3.1 数据流总图（(a′) 按记录带合成）
 
@@ -151,8 +156,8 @@ XMLSITE(锚点) ──> C_{c,p}(f)（log域插值到各档记录 bin 网格 f_k�
 
 - **正确性**：每通道每 bin = $\{\hat P_1,\hat P_2\}$ 线性组合（带合成与 FFT 均线性）⇒ 逐 bin $E=ZH$；包络时域逐样本 ⇒ 突发时长分辨率=采样间隔，下限=10 周期物理守卫（§2.5）。
 - **成本模型（按真实记录长重算）**：每记录源合成 = $2K$ 次 $N_{\rm rec}$ 长 IFFT + 2 次 FFT；每站每记录 5 次 IFFT。TS3 72h（K=21）：432×44×5·4800·12.2 ≈ 5.6e9 + 10站×432×5×2.9e5 ≈ 6.3e9 → ~1e10 FLOP（数秒）。TS5 72h（K≈39，截 $10^{-5}<f_b<6$Hz）：源 2×39 IFFT(3.9e6) ≈ 3.3e10 + 10站×5 IFFT ≈ 2.1e10 → 5–15s（v1 同规模 54s 的主要份额即 TS5，量级相当或更优）。**与模型频点数/dense 彻底无关**（判据见⑧）。单变换 FLOP≈5N·log₂N（复 FFT）——v0 的"70·N·log₂L"常数错误，一并作废。
-- **内存**：源累积 2×N f32 + 带工作区 c64 N + 每站输出 5N f32 流式。TS5 72h 峰值 ≈ 2×15.6 + 31 + 78 ≈ 140MB/站（v0 的"9N×4B=470MB"把 c64 当 4 字节，已改）。TS3/TS2 按记录块，<50MB。
-- **记录语义**：包络段链定义在全局真实时间轴（跨间隙连续，物理）；白噪声按记录独立抽签——间隙（≥120s）远大于带相关时间（f>0.01Hz 时 <300s 边界情形声明；TS5 连续无间隙）⇒ 统计等价于连续过程的离散采样；跨记录零伪相干。记录拼接处的相位不连续与 v1 相同（v1 段相位本就逐记录重置），mtprocess 拼接处理的窗跨缝行为同 v1。
+- **内存**：源累积 2×N f32 + 带工作区 c64 N + 每站输出 5N f32 流式；**包络与带分量逐带物化-相乘-释放，禁止全带驻留**（TS5 39 带全驻 ≈0.6GB；R2 约束）。TS5 72h 峰值 ≈ 2×15.6 + 31 + 78 ≈ 140MB/站（v0 的"9N×4B=470MB"把 c64 当 4 字节，已改）。TS3/TS2 按记录块，<50MB。
+- **记录语义**：包络段链定义在全局真实时间轴（跨间隙连续，物理）；白噪声按记录独立抽签——间隙（TS2 59.6s、TS3 598s、TS4 592s）远大于对应频段的带相关时间（TS2 最低带 τ_b≈0.3s；f>0.01Hz 时 <300s 的边界情形已声明；TS5/AMT-TS4 连续无间隙）⇒ 统计等价于连续过程的离散采样；跨记录零伪相干。记录拼接处的相位不连续与 v1 相同（v1 段相位本就逐记录重置），mtprocess 拼接处理的窗跨缝行为同 v1。
 
 ### 3.4 RNG 流（分级派生，R1 修订）
 
@@ -193,14 +198,14 @@ def render_site(spec, frames, T):  # T: (5, 2, n_bins) complex128
 |---|---|---|
 | `-source` | `lines`(默认)/`noise` | 引擎选择；noise 下 `-periods`/`-rot` 惰性 → **打印 WARNING 不报错**（AI 代理友好） |
 | `-preset` | `natural`(默认)/`pure-l1`/`full-event` | 仅 noise 源有效；`pure-l1` 供闸门⑥ |
-| `-source-params` | FILE.yaml | 覆盖预设（§2.2 全参数；schema 校验+非法组合启动期断言） |
+| `-source-params` | FILE.yaml | 覆盖预设（§2.2 **除 seed/起点外**的参数——二者属 CLI 与不变量；schema 校验+非法组合启动期断言） |
 | `-dense` | 语义弱化 | noise 源下仅控制 `<site>_dense.XMLSITE` 诊断输出粒度（mtprocess 参考） |
 
 **不暴露** `-burst-*/-event-*/-frame-s` 裸参数（R3-3；v0 的平铺面与预设策略矛盾）。`SYNTHTS_SUMMARY` 追加：`"source"`, `"preset"`, `"source_params"`, `"n_bands"`, `"events_dropped"`, `"rng":{numpy,blas,threads}`, `"summary_v":2`；**两种源统一写全字段**（不适用置 null），旧字段名零改动。
 
 ### 4.2 v2.0 默认切换配套清单（R3-7 补，与切换同 commit）
 
-1. `mt_e2e_demo.py` 闸门④在 noise 源下改为"带内无 comb 尖峰"核查（连续谱下"提升倍数"必然 FAIL 的问题必须在切换前解决）；②③判据不变。
+1. `mt_e2e_demo.py` 的**引擎自适应闸门集在 M1 落地**（noise 下④→带内无 comb 尖峰核查；lines 下判据不变）——避免 M1 验收命令 `--source both` 必然非零（R2-1 前移）；v2.0 切换 commit 仅复核；②③判据不变。
 2. SKILL.md：CLI contract 块增 `-source/-preset/-source-params`；"Single algorithm"表述改"Single pipeline, switchable source engines"；补 noise 源注意事项（惰性参数告警、输出统计特征差异）。
 3. README：性能表注明线谱实测、补 noise 行；"dense grids use -periods≥128" 提示限定 lines 源。
 4. CHANGELOG 破坏性说明 + v2.0 tag。
@@ -221,7 +226,7 @@ def render_site(spec, frames, T):  # T: (5, 2, n_bins) complex128
 | 4 | 24bit 回卷 | LN 增益尾×adc 超 ±2²³ | 增益截断 +4σ；越界计数进摘要 |
 | 5 | 闸门②失败 | 源被逐站重抽 | `P̂_p` 单实例 + 抽签哈希单测 |
 | 6 | 跨机不可复现 | numpy/BLAS/线程 | 复现承诺收窄（§3.4）+摘要审计字段 |
-| 7 | ULF 带整段缺样本 | f_b 低于 bin 密度 | f_b 下截 2/T_rec·16，退化为 L1 |
+| 7 | ULF 带整段缺样本 | f_b 低于 bin 密度 | f_b 下截 max(2/T_rec, f_lo^model)，退化为 L1 |
 | 8 | 多站 OOM | 输出同驻 | 逐站流式（v1 模式） |
 | 9 | 摘要破坏下游 | 键集假设 | 只增不改+统一写全+summary_v |
 | 10 | noise 源下 `-periods` 静默无效 | 惰性参数 | WARNING + 文档 |
@@ -236,11 +241,11 @@ P1 同源（②<2e-2，预期<1e-3）；P2 真连续谱（⑤）；P3 激励统�
 
 ### 5.2 新闸门（可执行定义，R1 修订处标注）
 
-**⑤ 谱连续性**（L1-only 模式运行）：探针 = 相邻网格点 log 中点±0.25 偏移；(a) 幅值比**与 $B_{\rm natural}$ 局部斜率归一**：amp(f_p)/amp(f_ref) ÷ [B(f_p)/B(f_ref)] > 0.8（R1-3：nature 在 ~6.5mHz 处斜率 −7.9dB/oct，0.25oct 偏移即 0.796，不归一必假失败）；(b) comb 纹波：**剔除带过渡区** |log₂(f/f_b)|∈[1/8,3/8] 后，相邻 bin 比 max|10lg| < 自适应阈 $\max(3,\ 4.34\sqrt{2/K_{\rm band}}\cdot\sqrt{2\ln B})$ dB（R1-4/R3-4：χ² 噪声自身在 K 小时 max 超 5dB，死阈值必随机挂）；无探针可测的带 → XFAIL+报告（R1-18；TS2 实际覆盖 10–6000Hz）。
+**⑤ 谱连续性**（L1-only 模式运行）：探针 = 相邻网格点 log 中点±0.25 偏移；(a) 幅值比**与 $B_{\rm natural}$ 局部斜率归一**：amp(f_p)/amp(f_ref) ÷ [B(f_p)/B(f_ref)] > 0.8（R1-3：nature 在 ~6.5mHz 处斜率 −7.9dB/oct，0.25oct 偏移即 0.796，不归一必假失败）；(b) comb 纹波：**剔除带过渡区** |log₂(f/f_b)|∈[1/8,3/8] 后；估计器=带内 $K_{\rm band}$ 个相邻 bin 周期图平均后取相邻点比值（$B$=带内比较次数；R2 补符号定义），判据 max|10lg| < 自适应阈 $\max(3,\ 4.34\sqrt{2/K_{\rm band}}\cdot\sqrt{2\ln B})$ dB（R1-4/R3-4：χ² 噪声自身在 K 小时 max 超 5dB，死阈值必随机挂）；无探针可测的带 → XFAIL+报告（R1-18；TS2 实际覆盖 10–6000Hz）。
 
 **⑥ 谱形吻合**（L1-only）：逐频 Welch PSD vs 理论——**理论参照用与渲染同一插值实现的 $|C_{H}(f)|^2$**（R1-17：直接 nature² 会吃掉插值曲率 ~0.3dB）；判据 $\mid$median_f Δ10lg$\mid<\max(1{\rm dB},3\cdot4.34/\sqrt{K_{\rm eff}})$，$K_{\rm eff}=0.75K$（R1-13/R2-10 重叠相关修正）；L2 开启时按带聚合+均值锚定修正 $\alpha_2$ 口径（§2.1）。
 
-**⑦ 幅度统计**：(a) ln A_w 的 KS **参照 = 同构造 Monte-Carlo 复合样本**（≥1e4，固定种子），临界值用参数化 bootstrap（R1-5：复合分布非 LN，两参数拟合+固定单实现无误差棒是错的）；同段/同帧窗共享 g ⇒ 有效样本折减纳入参照；(b) 突发段长：**参照分布由"同一估计器（过阈值连通段）跑全合成管线"生成**（R1-6：估计器自身有分裂/合并偏置，拿解析分布比必挂）；(c) 两极化带包络独立 |\rho|<0.3；带间相关检验改为**与含 $\gamma(t)$ 的模型一致**（σ_γ=0 时近零，>0 时按标定值，R1-8）。
+**⑦ 幅度统计**：(a) ln A_w 的 KS **参照 = 同构造 Monte-Carlo 复合样本**（≥1e4，固定种子），临界值用参数化 bootstrap（R1-5：复合分布非 LN，两参数拟合+固定单实现无误差棒是错的）；同段/同帧窗共享 g ⇒ 有效样本折减纳入参照；(b) 突发段长（**限连续档 TS5/AMT-TS4**——窗口档连通段被记录长截断，估计退化为截断分布、对标定无鉴别力，声明 XFAIL；R2-6）：**参照分布由"同一估计器（过阈值连通段）跑全合成管线"生成**（R1-6：估计器自身有分裂/合并偏置，拿解析分布比必挂）；(c) 两极化带包络独立 |\rho|<0.3；带间相关检验改为**与含 $\gamma(t)$ 的模型一致**（σ_γ=0 时近零，>0 时按标定值，R1-8）。
 
 **⑧ 成本基准**（本地/nightly，**不进 CI**——R3-5：共享 runner 墙钟噪声大）：median-of-5；判据 (a) v2 ≤1.5×v1；(b) **解耦证据改模型锚点数敏感性**（R3-11：dense 在 noise 源下只影响诊断文件，墙钟差无鉴别力）——锚点 8 vs 40 个模型，v2 墙钟差 <10%；(c) 内存 ≤2×v1。
 
@@ -251,8 +256,8 @@ P1 同源（②<2e-2，预期<1e-3）；P2 真连续谱（⑤）；P3 激励统�
 | 闸门 | v1 实测 | v2 预期 | 依据 |
 |---|---|---|---|
 | ①锚点 Z | 稀疏 3.7e-3；加密放宽 <1e-1 | **锚点** <1e-2（D4 收紧）；插值频点归③ | v2 无段散射；锚点=CTS 网格精确命中；插值频点受 responds 阶跃一阶混叠（§3.2），近界标记 |
-| ②同源 | 4.9e-4 | <1e-3 | 源逐 bin 共享 |
-| ③全网格 | median 8.7e-3 | median<1e-2、p90<5e-2 + **标度律**（残差 std~N_win^{-1/2}，log-log 斜率 −0.5±0.1） | 每窗新激励；screening 以 bypass_screen=True 跑（§2.4） |
+| ②同源 | 4.9e-4 | **<1e-4**（源逐 bin 单实例共享，预期机器精度级；v1 的 4.9e-4 含段级渲染路径差） | 源逐 bin 共享 |
+| ③全网格 | median 8.7e-3 | **L1/pure-l1 预设**：median<1e-2、p90<5e-2 + 标度律（自变量=**记录数**——同记录窗共享包络；log-log 斜率 −0.5±0.1）；**natural 预设（L2 激活）**：LSQ 权重∝$g^2$，方差膨胀 $\exp(4\sigma_g^2)\approx6.7$（std×2.6），p90 放宽至 1e-1 或按膨胀因子折算（R2-3） | 每窗新激励；screening 以 bypass_screen=True 跑（§2.4） |
 | ④PSD | 相对提升 76~1474x | 由⑤取代（绝对判据）；④保留为 lines 源专用 | 连续谱下相对指标失去鉴别力 |
 
 ### 5.4 真数据统计标定（同 v0 流程，R1 补降级路径）
@@ -282,7 +287,7 @@ P1 同源（②<2e-2，预期<1e-3）；P2 真连续谱（⑤）；P3 激励统�
 
 | 里程碑 | 内容 | 验收命令（可复制） | 人日 |
 |---|---|---|---|
-| **M1** L1+pure-l1 预设+按记录渲染+⑤⑥⑧ | noise_source(L1)/render_fft/T 装配/CTS 近界报告/`-source` 开关/golden 分桶 | `pytest -q && pytest -m slow && python tools/mt_e2e_demo.py --source both && python tools/cost_bench.py --local`：①②③(锚点<1e-2)⑤⑥⑧全 PASS | 10~12 |
+| **M1** L1+pure-l1 预设+按记录渲染+⑤⑥⑧ | noise_source(L1)/render_fft/T 装配/CTS 近界报告/`-source` 开关/**mtprocess `bypass_screen` 加性参数 + test_screen_bypass**/**`tools/cost_bench.py`**/**demo 引擎自适应闸门集（R2-1 前移）**/golden 分桶（机制：`tests/golden/<numpy版本>/hashes.json` 入库；`tools/regen_golden.py --verify` 再生与校验；CI 各矩阵版本 pin numpy 读对应桶；无桶版本降级统计等价判据） | `pytest -q && pytest -m slow && python tools/mt_e2e_demo.py --source both && python tools/cost_bench.py --local`：①②③(锚点<1e-2)⑤⑥⑧全 PASS | 10~12 |
 | **M2** L2+γ+L3+natural/full-event 预设+⑦+标定 | 包络段链/事件层/`calibrate_real.py`（或合成自标定降级） | 同上 + ⑤⑥⑦ 全 PASS + 标定报告（真实或降级） | 8~10 |
 | **M3** 切默认+文档+对拍 | §4.2 清单/SKILL/README/par_report 自动化/v2.0 tag | `pytest -q && pytest -m slow && python tools/par_report.py && git tag v2.0.0` | 4~5 |
 
