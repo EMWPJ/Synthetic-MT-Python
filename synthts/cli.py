@@ -5,6 +5,7 @@
   python -m synthts.cli -model site.XMLSITE -out OUT_DIR
               [-mode MT|AMT] [-periods 4] [-scale 1] [-rot ex,ey,hx,hy]
               [-dur 秒] [-seed 42] [-log FILE]
+              [-source lines|noise] [-preset pure-l1] [-source-params FILE.json]
 
 时间起点固定 2050-01-01 00:00:00（输出 TBL 的 FTIM/LTIM 同步）；
 -dur 未指定时按模式缺省：AMT=3600s、MT=72h(259200s)。
@@ -25,8 +26,9 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from . import __version__, calib, synth
+from . import __version__, calib, render_fft, source_params, synth
 from .model import load_site, densify_frequencies, resample_site_log, save_site
+from .noise_source import NoiseSource
 from .phoenix_ts import write_time_series
 from .tbl import TBL, from_tdatetime, to_tdatetime
 
@@ -64,6 +66,14 @@ def parse_args(argv=None):
                    help='对数域频点自动加密：每倍频程 N 个点（锚点保留，场按 log 域插值；'
                         '默认 4，0 关闭）')
     p.add_argument('-log', default='', help='运行日志文件')
+    p.add_argument('-source', default='lines', choices=['lines', 'noise'],
+                   help='合成引擎：lines=v1 线谱（默认，逐字节不变）；'
+                        'noise=v2 噪声源（M1：L1 连续谱底）')
+    p.add_argument('-preset', default='pure-l1',
+                   help='noise 源预设（pure-l1；natural/full-event 为 M2 排期）')
+    p.add_argument('-source-params', default='', metavar='FILE.json',
+                   help='noise 源参数覆盖 JSON（schema 见 synthts/source_params.py；'
+                        '不含 seed/起点）')
     return p.parse_args(argv)
 
 
@@ -101,6 +111,16 @@ def main(argv=None):
         say('  out   : %s' % args.out)
         say('  opt   : mode=%s sites=%d periods=%.4f scale=%.4f dur=%ss'
             % (args.mode, len(args.model), args.periods, args.scale, dur))
+        src_params = None
+        preset_name = None
+        if args.source == 'noise':
+            src_params, preset_name = source_params.resolve(
+                args.preset, args.source_params)
+            say('  source: noise (preset=%s, params=%s)'
+                % (preset_name, src_params))
+            say('  warn  : -periods/-rot 对 noise 源为惰性参数（已忽略）')
+        else:
+            say('  source: lines (v1 RandomSegmentPartiallyWindowed)')
 
         os.makedirs(args.out, exist_ok=True)
         out_files = []                     # 登记全部输出文件，供 JSON 摘要
@@ -151,15 +171,6 @@ def main(argv=None):
         etime = to_tdatetime(etime_dt)
         schemas = synth.build_schemas(tbl, args.mode, args.periods, args.scale)
 
-        # 5. 同源方案一次抽签 + 逐档整批渲染（载波跨测点复用）+ 逐测点落盘
-        rng = np.random.default_rng(args.seed)
-        union_freqs = sorted({f for _, site in sites for f in site.get_frequencies(False)})
-        scenarios = synth.build_schema_scenarios(schemas, union_freqs, btime,
-                                                 etime, args.periods, rng)
-        rot = tuple(float(v) * 3.141592653589793 / 180.0 for v in args.rot.split(','))
-        if len(rot) != 4:
-            raise ValueError('-rot 须为 exDeg,eyDeg,hxDeg,hyDeg')
-        import copy
         import math as _m
 
         out_dir = args.out.replace('\\', '/')
@@ -184,25 +195,62 @@ def main(argv=None):
             out_files.append(f'{out_dir}{site_name}.TBL')
             say('  输出  : %s%s.TBL' % (out_dir, site_name))
 
-        for schema in schemas:
-            t_seg = time.time()
-            site_k_list = []
-            for model_path, site in sites:
-                site_k = copy.deepcopy(site)
-                site_k.add_calibration(responds_by_site[model_path])
-                site_k_list.append(site_k)
-            ts_list = synth.synthetic_sites(site_k_list, schema,
-                                            scenarios[schema['name']], rot)
-            del site_k_list
-            for k, ts in enumerate(ts_list):
-                path = write_time_series(ts, out_dir, tbl, site_names[k])
-                out_files.append(path)
-                n_samples = sum(len(s) for s in ts['channels'][0]) if ts['channels'] and ts['channels'][0] else 0
-                say('  synth : %s %s done (%.0f ms, segs=%d samples0=%d) -> %s'
-                    % (site_names[k], schema['name'], (time.time() - t_seg) * 1000,
-                       len(ts['begins']), n_samples, path))
-                ts_list[k] = None                # 逐测点释放（大数组）
-            del ts_list
+        sig_all = [f for _, site in sites for f in site.get_frequencies(False)]
+        n_bands_info = None
+        if args.source == 'noise':
+            # v2 噪声源：按记录带合成（设计 §3 方案 (a′)）；标定以逐 bin 最近
+            # 邻折进 T（render_fft.transfer_matrix），不走 add_calibration——
+            # 与 mtprocess 处理端 compute_responds 的最近邻口径一致
+            noise = NoiseSource(args.seed, src_params)
+            plans = render_fft.plan_from_schemas(schemas, btime, etime)
+            children = noise.schema_children([p.name for p in plans.values()])
+            n_bands_info = {name: render_fft.band_count_for_plan(
+                plans[name], min(sig_all), max(sig_all)) for name in plans}
+            for schema in schemas:
+                t_seg = time.time()
+                plan = plans[schema['name']]
+                ts_list = noise.render_schema(
+                    [site for _, site in sites], schema, plan,
+                    children[schema['name']])
+                for k, ts in enumerate(ts_list):
+                    path = write_time_series(ts, out_dir, tbl, site_names[k])
+                    out_files.append(path)
+                    n_samples = sum(len(s) for s in ts['channels'][0]) if ts['channels'] and ts['channels'][0] else 0
+                    say('  synth : %s %s done (%.0f ms, segs=%d samples0=%d) -> %s'
+                        % (site_names[k], schema['name'], (time.time() - t_seg) * 1000,
+                           len(ts['begins']), n_samples, path))
+                    ts_list[k] = None                # 逐测点释放（大数组）
+                del ts_list
+        else:
+            # 5. 同源方案一次抽签 + 逐档整批渲染（载波跨测点复用）+ 逐测点落盘
+            rng = np.random.default_rng(args.seed)
+            union_freqs = sorted({f for _, site in sites for f in site.get_frequencies(False)})
+            scenarios = synth.build_schema_scenarios(schemas, union_freqs, btime,
+                                                     etime, args.periods, rng)
+            rot = tuple(float(v) * 3.141592653589793 / 180.0 for v in args.rot.split(','))
+            if len(rot) != 4:
+                raise ValueError('-rot 须为 exDeg,eyDeg,hx,hy')
+            import copy
+
+            for schema in schemas:
+                t_seg = time.time()
+                site_k_list = []
+                for model_path, site in sites:
+                    site_k = copy.deepcopy(site)
+                    site_k.add_calibration(responds_by_site[model_path])
+                    site_k_list.append(site_k)
+                ts_list = synth.synthetic_sites(site_k_list, schema,
+                                                scenarios[schema['name']], rot)
+                del site_k_list
+                for k, ts in enumerate(ts_list):
+                    path = write_time_series(ts, out_dir, tbl, site_names[k])
+                    out_files.append(path)
+                    n_samples = sum(len(s) for s in ts['channels'][0]) if ts['channels'] and ts['channels'][0] else 0
+                    say('  synth : %s %s done (%.0f ms, segs=%d samples0=%d) -> %s'
+                        % (site_names[k], schema['name'], (time.time() - t_seg) * 1000,
+                           len(ts['begins']), n_samples, path))
+                    ts_list[k] = None                # 逐测点释放（大数组）
+                del ts_list
         say('DONE (%.1f s)' % (time.time() - t0))
         # 机器可读摘要：仅 stdout（不进 -log），一行 JSON，供脚本/AI 代理解析
         summary = {
@@ -216,6 +264,14 @@ def main(argv=None):
             'rot': args.rot, 'seed': args.seed, 'dense': args.dense,
             'out_dir': os.path.abspath(args.out),
             'files': out_files, 'n_files': len(out_files),
+            'source': args.source,
+            'preset': preset_name,
+            'source_params': src_params,
+            'n_bands': n_bands_info,
+            'events_dropped': 0 if args.source == 'noise' else None,
+            'rng': {'numpy': np.__version__,
+                    'threads': os.environ.get('OMP_NUM_THREADS', '')},
+            'summary_v': 2,
             'elapsed_s': round(time.time() - t0, 3),
         }
         print('SYNTHTS_SUMMARY ' + json.dumps(summary, ensure_ascii=False))

@@ -140,8 +140,12 @@ def pick_ts_file(freq, ts_dir, site_name):
     return best[0], best[2], best[3], best[1]
 
 
-def estimate_impedance_at(freq, ts_dir, site_name):
-    """单频阻抗估计（标定 + 复数 LSQ）。返回 (Z 2x2 complex, n_windows) 或 None。"""
+def estimate_impedance_at(freq, ts_dir, site_name, bypass_screen=False):
+    """单频阻抗估计（标定 + 复数 LSQ）。返回 (Z 2x2 complex, n_windows) 或 None。
+
+    bypass_screen=True 跳过半窗一致性筛查（v2 噪声源用：独立复高斯半窗对
+    的通过率仅 ~4%，筛查口径不适配；默认 False 行为与 v1 逐位一致）。
+    """
     picked = pick_ts_file(freq, ts_dir, site_name)
     if picked is None:
         return None
@@ -158,10 +162,11 @@ def estimate_impedance_at(freq, ts_dir, site_name):
     fhx = xhx * r[2][0] / MU0
     fhy = xhy * r[3][0] / MU0
 
-    # 半窗筛查：剔除含分段边界（相位跳变）的窗
-    mask = screen_windows([data[0]], fs, freq)
-    if mask.sum() >= 8 and len(mask) == len(fe):
-        fe = fe[mask]; fy = fy[mask]; fhx = fhx[mask]; fhy = fhy[mask]
+    # 半窗筛查：剔除含分段边界（相位跳变）的窗（噪声源可经 bypass_screen 跳过）
+    if not bypass_screen:
+        mask = screen_windows([data[0]], fs, freq)
+        if mask.sum() >= 8 and len(mask) == len(fe):
+            fe = fe[mask]; fy = fy[mask]; fhx = fhx[mask]; fhy = fhy[mask]
 
     # 复数 LSQ: [Hx Hy]·[Zxx Zxy]^T = Ex（Ey 同理）
     hmat = np.column_stack([fhx, fhy])
@@ -184,7 +189,7 @@ def theoretical_impedance(model_file):
     return out
 
 
-def process(model_file, ts_dir, site_name=None):
+def process(model_file, ts_dir, site_name=None, bypass_screen=False):
     """端到端：合成频率逐频估计阻抗，与理论值比对。
 
     返回 [(freq, Z_est, Z_theory, nwin, max_rel_err)]。
@@ -197,7 +202,8 @@ def process(model_file, ts_dir, site_name=None):
     for f in site.fields:
         if f.is_noise:
             continue
-        est = estimate_impedance_at(f.frequency, ts_dir, site_name)
+        est = estimate_impedance_at(f.frequency, ts_dir, site_name,
+                                    bypass_screen=bypass_screen)
         if est is None:
             continue
         z_est, nwin = est

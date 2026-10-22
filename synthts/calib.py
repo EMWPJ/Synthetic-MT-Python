@@ -86,3 +86,50 @@ def compute_responds(freqs):
         for c in range(5):
             out[c].append(transform_cts(z5[c]))
     return out
+
+
+# ── 预变换的网格缓存（responds_on_grid 用；_parse 后各组已按频率升序）──────
+_GRID_CACHE = {}
+
+
+def _grid_for(band):
+    if band not in _GRID_CACHE:
+        group = _MT.get(band) or _AMT.get(band)
+        if group is None:
+            _GRID_CACHE[band] = None
+        else:
+            import numpy as np
+            gf = np.array([gf for gf, _ in group])
+            tv = np.array([[transform_cts(z5[c]) for _, z5 in group]
+                           for c in range(5)])
+            _GRID_CACHE[band] = (gf, tv)
+    return _GRID_CACHE[band]
+
+
+def responds_on_grid(freqs):
+    """compute_responds 的向量化入口（逐点语义恒等，供 v2 逐 bin 装配）。
+
+    返回 [5] 个 numpy complex 数组，长度同 freqs。最近邻平局时保留较左侧
+    网格点（与 _nearest 的"严格更优才替换"语义一致）。
+    """
+    import numpy as np
+    f = np.asarray(freqs, dtype=float)
+    bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+    out = [np.empty(len(f), dtype=complex) for _ in range(5)]
+    for band in (2, 3, 4, 5):
+        idx = np.nonzero(bands == band)[0]
+        if not len(idx):
+            continue
+        grid = _grid_for(band)
+        if grid is None:
+            for c in range(5):
+                out[c][idx] = 1e-6 if c < 2 else 1e-9
+            continue
+        gf, tv = grid
+        pos = np.clip(np.searchsorted(gf, f[idx]), 1, len(gf) - 1)
+        d_lo = np.abs(gf[pos - 1] - f[idx])
+        d_hi = np.abs(gf[pos] - f[idx])
+        j = np.where(d_hi < d_lo, pos, pos - 1)
+        for c in range(5):
+            out[c][idx] = tv[c][j]
+    return out
