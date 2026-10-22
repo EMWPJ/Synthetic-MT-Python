@@ -185,6 +185,54 @@ def plot_timeseries(out_dir, dense_model, png):
     plt.close(fig)
 
 
+def _stft_db(x, fs, nfft, hop):
+    """numpy STFT → (freqs, times, dB 幅度)。"""
+    w = np.hanning(nfft)
+    nfrm = max((len(x) - nfft) // hop + 1, 1)
+    S = np.empty((nfft // 2 + 1, nfrm), dtype=np.float64)
+    for i in range(nfrm):
+        S[:, i] = np.abs(np.fft.rfft(x[i * hop:i * hop + nfft] * w))
+    freqs = np.fft.rfftfreq(nfft, 1.0 / fs)
+    times = np.arange(nfrm) * hop / fs
+    db = 20.0 * np.log10(S / max(S.max(), 1e-300) + 1e-12)
+    return freqs, times, db
+
+
+def plot_spectrogram(out_dir, png):
+    """三档采样率的 Hx 时频谱（L2 分带突发的可视化：能量带随时间起落）。"""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    panels = [  # (band, nfft, hop, f_lo, f_hi, title, x_lab)
+        ('TS3', 1 << 12, 1 << 10, 2.0, 1200.0,
+         '(a) Hx spectrogram, 2400 Hz', 'Time (s, record-concat)'),
+        ('TS4', 1 << 11, 1 << 9, 0.2, 75.0,
+         '(b) Hx spectrogram, 150 Hz', 'Time (s, record-concat)'),
+        ('TS5', 1 << 11, 1 << 9, 0.02, 7.0,
+         '(c) Hx spectrogram, 15 Hz', 'Time (s)'),
+    ]
+    fig, axes = plt.subplots(3, 1, figsize=(10, 10))
+    for ax, (band, nfft, hop, f_lo, f_hi, title, x_lab) in zip(axes, panels):
+        sr, data = mtprocess.read_ts(os.path.join(out_dir, '%s.%s' % (SITE, band)))
+        fs = float(sr)
+        x = data[2].astype(np.float64)                      # Hx
+        nfft = min(nfft, len(x))
+        freqs, times, db = _stft_db(x, fs, nfft, max(hop, nfft // 4))
+        m = (freqs >= f_lo) & (freqs <= f_hi)
+        im = ax.pcolormesh(times, freqs[m], db[m], shading='auto',
+                           cmap='magma', vmin=-50.0, vmax=0.0)
+        ax.set_yscale('log')
+        ax.set_ylim(f_lo, f_hi)
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel(x_lab)
+        ax.set_ylabel('Frequency (Hz)')
+        fig.colorbar(im, ax=ax, label='dB', pad=0.01)
+    fig.tight_layout()
+    fig.savefig(png, dpi=150)
+    plt.close(fig)
+
+
 def _fold_phase(deg):
     """MT 惯例：相位折叠到 (-90, 90]（YX 与 XY 相差 180°）。"""
     return (deg + 90.0) % 180.0 - 90.0
@@ -251,6 +299,9 @@ def main():
 
     plot_timeseries(out_dir, dense_model, os.path.join(out_dir, 'fig_time_series.png'))
     print('  figure: %s' % os.path.join(out_dir, 'fig_time_series.png'))
+
+    plot_spectrogram(out_dir, os.path.join(out_dir, 'fig_spectrogram.png'))
+    print('  figure: %s' % os.path.join(out_dir, 'fig_spectrogram.png'))
 
     rows = mtprocess.process(dense_model, out_dir)
     plot_rho_phase(rows, os.path.join(out_dir, 'fig_rho_phase.png'))
