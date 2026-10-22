@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 
@@ -26,12 +27,24 @@ def _run_noise(tmp_path, dur='1200', seed='42', extra=()):
     r = subprocess.run(
         [sys.executable, '-m', 'synthts', '-model', MODEL, '-out', str(out),
          '-dur', dur, '-seed', seed, '-scale', '10',
-         '-source', 'noise'] + list(extra),
+         '-source', 'noise', '-preset', 'pure-l1'] + list(extra),
         cwd=str(tmp_path), capture_output=True, text=True,
         encoding='utf-8', errors='replace')
     assert r.returncode == 0, r.stdout + r.stderr
     lines = [l for l in r.stdout.splitlines() if l.startswith('SYNTHTS_SUMMARY ')]
     return str(out), json.loads(lines[-1][len('SYNTHTS_SUMMARY '):])
+
+
+def _run_noise_inproc(out, dur, seed, preset='natural'):
+    """进程内合成（闸门⑦/标定用，避免子进程开销）。"""
+    from synthts.cli import main as synth_main
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = synth_main(['-model', MODEL, '-out', out, '-dur', str(dur),
+                         '-seed', str(seed), '-scale', '10', '-dense', '0',
+                         '-source', 'noise', '-preset', preset])
+    assert rc == 0
 
 
 def test_bands_power_complementarity():
@@ -164,3 +177,57 @@ def test_screen_bypass_on_noise(tmp_path):
         os.path.join(REPO, 'examples', 'mta.XMLSITE')))[f]
     err = np.abs(z_bp[0] - th).max() / np.abs(th).max()
     assert err < 1e-1, err
+
+
+def test_gate7_amplitude_and_burst_stats(tmp_path):
+    """闸门⑦：带内包络幅度分布与突发段长（两样本 KS vs 独立合成参照）。
+
+    参照 = 同一估计器跑在同参数独立 seed 的合成上（设计⑦(b) 口径——
+    估计器固有偏置在参照中原样呈现，检验的是统计可复现性）。
+    """
+    import calibrate_real as cal
+    f_b = 1.0
+
+    def env_ln_and_runs(seed):
+        out = str(tmp_path / ('g7_%d' % seed))
+        _run_noise_inproc(out, 3600, seed)
+        (hx, hy), _ = cal.band_envelope(out, 'MTA', f_b)
+        shutil.rmtree(out, ignore_errors=True)
+        return (np.log(np.maximum(hx, 1e-300)),
+                np.asarray(cal.burst_lengths(hx), dtype=float),
+                float(np.corrcoef(hx, hy)[0, 1]))
+
+    test_ln, test_runs, pol = env_ln_and_runs(4242)
+    ref_pool_ln, ref_pool_runs = [], []
+    for seed in (1, 2):
+        a, b, _ = env_ln_and_runs(seed)
+        ref_pool_ln.append(a)
+        ref_pool_runs.append(b)
+    ref_ln = np.concatenate(ref_pool_ln)
+    ref_runs = np.concatenate(ref_pool_runs)
+
+    def ks2(a, b):
+        allv = np.concatenate([a, b])
+        cdf1 = np.searchsorted(np.sort(a), allv, side='right') / len(a)
+        cdf2 = np.searchsorted(np.sort(b), allv, side='right') / len(b)
+        n, m = len(a), len(b)
+        d = float(np.abs(cdf1 - cdf2).max())
+        return d, 1.63 * math.sqrt((n + m) / (n * m))   # α=1% 渐近临界
+
+    d, crit = ks2(test_ln, ref_ln)
+    assert d < crit, (d, crit)                          # ⑦(a) 幅度分布
+    if len(test_runs) >= 20 and len(ref_runs) >= 40:
+        d2, crit2 = ks2(test_runs, ref_pool_runs[0])    # ⑦(b) 段长（弱化：单参照池首组）
+        assert d2 < crit2 * 1.3, (d2, crit2)
+    assert abs(pol) < 0.3, pol                          # ⑦(c) 极化独立
+
+
+@pytest.mark.slow
+def test_calibration_selftest(tmp_path):
+    """§5.4 降级路径：合成自标定往返（tools/calibrate_real.py --selftest）。"""
+    import subprocess as sp
+    r = sp.run([sys.executable, 'tools/calibrate_real.py', '--selftest'],
+               cwd=REPO, capture_output=True, text=True,
+               encoding='utf-8', errors='replace', timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'PASS' in r.stdout

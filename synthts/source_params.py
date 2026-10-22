@@ -8,11 +8,16 @@ import json
 import os
 import sys
 
-# 预设表（M1 仅 pure-l1 激活；natural/full-event 为 M2 排期）
+# 预设表（M2：三层全激活；参数语义见设计 §2.2）
 PRESETS = {
     'pure-l1': {'alpha1': 1.0, 'alpha2': 0.0, 'alpha3': 0.0},
-    'natural': None,        # M2：L2 分带突发（§2.2 默认参数）
-    'full-event': None,     # M2：natural + L3 事件层
+    'natural': {'alpha1': 0.01, 'alpha2': 0.99, 'alpha3': 0.0,
+                'burst_periods': 64.0, 'burst_len_sigma': 0.5,
+                'burst_sigma_db': 6.0, 'common_sigma_db': 0.0},
+    'full-event': {'alpha1': 0.01, 'alpha2': 0.79, 'alpha3': 0.20,
+                   'burst_periods': 64.0, 'burst_len_sigma': 0.5,
+                   'burst_sigma_db': 6.0, 'common_sigma_db': 0.0,
+                   'event_rate': 12.0, 'event_q': 8.0, 'event_sigma_db': 10.0},
 }
 
 # 源参数 schema v1（可注入项与取值约束；只增不改，语义版本号见 SCHEMA_VER）
@@ -27,7 +32,8 @@ PARAM_SCHEMA = {
     'burst_sigma_db': (float, 3.0, 10.0),     # 段增益 LN σ（dB，M2）
     'common_sigma_db': (float, 0.0, 3.0),     # 跨带公共因子 γ σ（M2，0=关）
     'event_rate': (float, 0.0, 1e6),          # L3 事件率（次/记录小时，M2）
-    'event_q': (float, 3.0, 100.0),           # L3 Gabor Q（M2）
+    'event_q': (float, 3.0, 100.0),           # L3 Gabor Q
+    'event_sigma_db': (float, 6.0, 15.0),     # L3 事件幅度 LN σ（dB，M2 追加）
 }
 
 # L4 加性噪声层参数 schema（§9.5 冻结；M4 实现，v2.0 仅占位校验）
@@ -68,9 +74,7 @@ def resolve(preset, params_file):
     """预设 + 注入文件 → 生效参数。返回 (params_dict, preset_name)。"""
     if preset not in PRESETS:
         raise SystemExit('unknown preset: %s' % preset)
-    if preset in ('natural', 'full-event'):
-        raise SystemExit('preset %s is scheduled for M2 (not implemented)' % preset)
-    params = dict(PRESETS[preset]) if PRESETS[preset] else {}
+    params = dict(PRESETS[preset])
     if params_file:
         with open(params_file, encoding='utf-8') as fh:
             override = json.load(fh)

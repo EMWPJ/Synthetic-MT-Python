@@ -69,8 +69,9 @@ def parse_args(argv=None):
     p.add_argument('-source', default='lines', choices=['lines', 'noise'],
                    help='合成引擎：lines=v1 线谱（默认，逐字节不变）；'
                         'noise=v2 噪声源（M1：L1 连续谱底）')
-    p.add_argument('-preset', default='pure-l1',
-                   help='noise 源预设（pure-l1；natural/full-event 为 M2 排期）')
+    p.add_argument('-preset', default='natural',
+                   help='noise 源预设（natural 默认=分层带突发；pure-l1；'
+                        'full-event=+事件层）')
     p.add_argument('-source-params', default='', metavar='FILE.json',
                    help='noise 源参数覆盖 JSON（schema 见 synthts/source_params.py；'
                         '不含 seed/起点）')
@@ -197,6 +198,7 @@ def main(argv=None):
 
         sig_all = [f for _, site in sites for f in site.get_frequencies(False)]
         n_bands_info = None
+        events_dropped = 0
         if args.source == 'noise':
             # v2 噪声源：按记录带合成（设计 §3 方案 (a′)）；标定以逐 bin 最近
             # 邻折进 T（render_fft.transfer_matrix），不走 add_calibration——
@@ -204,14 +206,15 @@ def main(argv=None):
             noise = NoiseSource(args.seed, src_params)
             plans = render_fft.plan_from_schemas(schemas, btime, etime)
             children = noise.schema_children([p.name for p in plans.values()])
-            n_bands_info = {name: render_fft.band_count_for_plan(
-                plans[name], min(sig_all), max(sig_all)) for name in plans}
+            n_bands_info = {}
             for schema in schemas:
                 t_seg = time.time()
                 plan = plans[schema['name']]
-                ts_list = noise.render_schema(
+                ts_list, info = noise.render_schema(
                     [site for _, site in sites], schema, plan,
-                    children[schema['name']])
+                    children[schema['name']], min(sig_all), max(sig_all), dur)
+                n_bands_info[schema['name']] = info['n_bands']
+                events_dropped += info['events_dropped']
                 for k, ts in enumerate(ts_list):
                     path = write_time_series(ts, out_dir, tbl, site_names[k])
                     out_files.append(path)
@@ -268,7 +271,7 @@ def main(argv=None):
             'preset': preset_name,
             'source_params': src_params,
             'n_bands': n_bands_info,
-            'events_dropped': 0 if args.source == 'noise' else None,
+            'events_dropped': events_dropped if args.source == 'noise' else None,
             'rng': {'numpy': np.__version__,
                     'threads': os.environ.get('OMP_NUM_THREADS', '')},
             'summary_v': 2,
