@@ -189,6 +189,15 @@ def run_engine(engine, name):
     print('  median=%.3e max=%.3e, p90=%.3e（判据 median<%.0e 且 ≥90%%<%.0e）'
           % (np.median(errs), errs.max(), np.percentile(errs, 90),
              med_thr, p90_thr))
+    # 频带分级（精度按频带如实报告：低频受窗分辨率与统计时长约束）
+    fs_all = np.array([r[0] for r in rows])
+    hi = fs_all >= 0.35
+    lo = ~hi
+    print('  分带  : ≥0.35Hz median=%.3e max=%.3e | 0.10-0.35Hz median=%.3e '
+          'max=%.3e（窗分辨率物理地板：8 周期窗核内 Z 加权平均，'
+          '加长记录/窗按 1/√(dur·f) 收敛）'
+          % (np.median(errs[hi]), errs[hi].max(),
+             np.median(errs[lo]), errs[lo].max()))
 
     print()
     if engine == 'lines':

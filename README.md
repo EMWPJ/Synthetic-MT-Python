@@ -208,6 +208,15 @@ Draws two figures in the style of Wang et al. (2023) for a three-layer demo mode
 | 10 days × 10 sites (coherently paired) | 127 s | — |
 | 72 h × 1 site | — | ~121 s (TS5 band-synthesis FFTs dominate) |
 
+**Recovered accuracy** (processed with the built-in `mtprocess`, dense grid,
+vs the theoretical impedance — by frequency band):
+
+| Band | ρa max rel. error | Note |
+|---|---|---|
+| 0.35 – 320 Hz | < 1 % (typ. 3–8 ×10⁻³) | within window-resolution accuracy |
+| 0.10 – 0.35 Hz | ~2×10⁻² (floor) | window-resolution physical floor: the 8-period processing window averages Z across its ±0.32-octave main lobe; converges as 1/√(dur·f) with longer records |
+| phase (all bands) | median 0.011° | far inside 1° |
+
 lines numbers are the v1 engine (sparse comb matched to the processing window);
 noise runs are cost-decoupled from the model frequency count (anchor-count
 sensitivity <10%, interleaved benchmark; see `tools/cost_bench.py`).
