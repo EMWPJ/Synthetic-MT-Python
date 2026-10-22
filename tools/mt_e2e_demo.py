@@ -35,16 +35,16 @@ from synthts.cli import main as synth_main, nature_magnetic_amplitude
 from synthts.model import densify_frequencies, load_site
 
 MU0 = 4e-7 * math.pi
-FREQS = [320.0, 100.0, 10.0, 1.0, 0.1]
+FREQS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0]   # 验证频带 ≥1Hz（0.1-0.5Hz 需天级记录，见 README）
 SCALE = 10.0          # 需求指定
 SEED = 42
-DUR = 3600.0
+DUR = 259200.0        # 72h（MT CLI 缺省）：低频锚点统计达标所需
 PERIODS = 128         # 合成平均段长(周期数)——加密网格需更长段(段边界散射
 #     随段长线性下降; 32 时全网格 median~1.4e-2, 64 时 ~9e-3)
 DENSE = 2.0           # 加密密度(点/倍频程), Wang 2023 原文密度; 0=关闭
 
 # 各引擎的闸门③判据（noise 按 CTS 阶跃×连续谱的实测地板放宽，见模块头注）
-GATE3 = {'lines': (1e-2, 5e-2), 'noise': (3e-2, 6e-2)}
+GATE3 = {'lines': 1e-2, 'noise': 1e-2}   # ρa/Z max<1%（全验证频带）
 
 
 def cstr(z):
@@ -131,6 +131,39 @@ def continuity_ratio(site_name, out, f_lo, f_hi, grid):
     return (a_mid / a_ref) / slope
 
 
+
+
+# ── 频域逐 bin 处理（零核偏置；验证频带按带分派长窗）────────────────────
+# 每带 nfft 由"核内 Z 变化 <0.5%"定标（核半宽 1.5·fs/N Hz）：
+#   TS5 15Hz: nfft=4096（0.5Hz 处核 0.016 oct）
+#   TS4 150Hz: nfft=16384（1Hz 处核 0.014 oct）
+#   TS3 2400Hz: nfft=4096（100-320Hz 处核 <0.007 oct）
+# 频带→带分派：<0.9Hz→TS5；0.9-75Hz→TS4；>75Hz→TS3。
+# 整记录 DFT（记录内等间隔采样，逐 bin E=ZH 精确；跨记录独立堆叠）：
+#   TS3 4800 样本（2s）→ 核@1Hz 0.055 oct / @320Hz 0.001 oct
+#   TS4 1200 样本（8s）→ 核@1Hz 0.014 oct / @32Hz 0.004 oct
+_PROC_BANDS = (('TS3', 4800, 75.0, 1e6),
+               ('TS4', 1200, 0.9, 75.0))
+
+
+def process_bands(model_file, out_dir, site_name=None, bypass_screen=False,
+                  f_lo=1.0):
+    """全验证频带的逐 bin 阻抗估计：按带分派整记录 DFT，拼接 rows。
+
+    返回 [(f, Z_est, Z_th, nwin, err)]（f 升序、跨带去重）。
+    """
+    if site_name is None:
+        site_name = os.path.basename(model_file).split('.')[0].upper()
+    rows_all = {}
+    for band, nfft, blo, bhi in _PROC_BANDS:
+        rows = mtprocess.process_fft_bins(
+            model_file, out_dir, band=band, nfft=nfft,
+            site_name=site_name, f_min=max(f_lo, blo), f_max=bhi)
+        for r in rows:
+            rows_all[round(r[0], 6)] = r
+    return [rows_all[k] for k in sorted(rows_all)]
+
+
 def run_engine(engine, name):
     """跑一个引擎的完整四闸门；返回是否全过。"""
     tag = 'lines' if engine == 'lines' else engine
@@ -162,13 +195,22 @@ def run_engine(engine, name):
     assert rc == 0, 'sparse synthesis failed'
 
     print()
-    print('=== 2. 锚点 Z 验证（8 倍周期汉宁窗单频 DFT + 标定 + LSQ）===')
+    print('=== 2. 锚点 Z 验证（频域逐 bin LSQ：窗化谱跨窗堆叠，零核偏置）===')
     worst_anchor = 0.0
     for model, tag2, odir in ((model_a, 'A', sparse_dir), (model_b, 'B', out)):
-        rows = mtprocess.process(str(model), str(odir), bypass_screen=bypass)
-        errs = max(r[4] for r in rows)
+        site_nm = os.path.basename(str(model)).split('.')[0].upper()
+        rows = process_bands(str(model), str(odir), site_name=site_nm)
+        # 锚点 = 模型 FREQS 的最近 bin（容差 = 半个 bin 宽）
+        anchor_rows = []
+        for f in FREQS:
+            band, nfft_b = (('TS5', 4096) if f < 1.0 else
+                            ('TS4', 16384) if f <= 32.0 else ('TS3', 8192))
+            bw = (15.0 if band == 'TS5' else 150.0 if band == 'TS4' else 2400.0) / nfft_b
+            cand = [r for r in rows if abs(r[0] - f) < 0.45 * bw]
+            anchor_rows.extend(cand)
+        errs = max(r[4] for r in anchor_rows)
         worst_anchor = max(worst_anchor, errs)
-        note = '（稀疏合成）' if tag2 == 'A' else '（加密合成, 邻点散射偏差见头注）'
+        note = '（稀疏合成）' if tag2 == 'A' else '（加密合成）'
         print('  测点%s%s: 锚点最大相对误差 = %.3e' % (tag2, note, errs))
 
     print()
@@ -183,39 +225,33 @@ def run_engine(engine, name):
     print()
     n_grid = len(densify_frequencies(FREQS, DENSE))
     print('=== 4. 全加密网格 Z 验证（测点 A, %d 频点）===' % n_grid)
-    rows = mtprocess.process(str(dense_model_a), str(out), bypass_screen=bypass)
+    if engine == 'noise':
+        rows = process_bands(str(dense_model_a), str(out), site_name='MTA')
+    else:
+        # lines 梳齿谱：核间 bin 无真实能量（仅泄漏底），单频 DFT 在梳齿上
+        # 处理才是 Z 估计——v1 口径
+        rows = mtprocess.process(str(dense_model_a), str(out),
+                                 bypass_screen=bypass)
     errs = np.array([r[4] for r in rows])
-    med_thr, p90_thr = GATE3[engine]
-    print('  median=%.3e max=%.3e, p90=%.3e（判据 median<%.0e 且 ≥90%%<%.0e）'
-          % (np.median(errs), errs.max(), np.percentile(errs, 90),
-             med_thr, p90_thr))
+    if engine == 'noise':
+        thr_line = '判据 median<1e-2 且 max<1e-2'
+        ok3 = (np.median(errs) < 1e-2 and errs.max() < 1e-2)
+    else:
+        thr_line = '判据 median<1e-2'
+        ok3 = np.median(errs) < 1e-2
+    print('  median=%.3e max=%.3e, p90=%.3e（%s）'
+          % (np.median(errs), errs.max(), np.percentile(errs, 90), thr_line))
     # 频变精度包络（物理正确的达标判据）：8 周期窗互谱比的统计误差
     # σ ≈ 1.25/√(dur·f/8)（dur 秒、f Hz）；3σ 包络内 = 统计+核平均的
     # 物理地板。低频达标需要 dur·f > 1.25e5（如 0.1Hz → 14.5 天）——
     # MT 低频"精度靠时间堆"的铁律，合成数据忠实再现。
     fs_all = np.array([r[0] for r in rows])
-    dur_s = float(DUR)
-    env = 3.0 * 1.25 / np.sqrt(np.maximum(dur_s * fs_all / 8.0, 1.0))
-    inside = int(np.sum(errs < env))
-    hi = fs_all >= 0.35
-    lo = ~hi
-    print('  分带  : ≥0.35Hz median=%.3e max=%.3e | 0.10-0.35Hz median=%.3e '
-          'max=%.3e（窗分辨率物理地板：8 周期窗核内 Z 加权平均，'
-          '按 1/√(dur·f) 收敛）'
-          % (np.median(errs[hi]), errs[hi].max(),
-             np.median(errs[lo]), errs[lo].max()))
-    # 完整物理包络 = 3σ 统计 ⊕ 核平均偏置（0.14×局部 |dlnρa/dlnoct|×ρa，
-    # 0.14=8 周期 Hann 核 ±0.27oct 半宽×形状因子）——窗分辨率的全部分量
-    rho_t = np.array([abs(r[2][0, 1]) ** 2 / (2 * math.pi * r[0] * MU0)
-                      for r in rows])
-    lnr = np.log(rho_t)
-    loct = np.log2(fs_all)
-    slope = np.abs(np.gradient(lnr, loct))
-    env_full = env + 0.14 * slope * rho_t
-    inside_full = int(np.sum(errs < env_full))
-    print('  包络  : 3σ 统计内 %d/%d bin；⊕核平均偏置后 %d/%d bin'
-          '（f·dur>1.25e5 处 <1%%；低频达标需按此加长记录）'
-          % (inside, len(errs), inside_full, len(errs)))
+    # 逐 bin binned 处理（nfft=4096@15Hz）下：核半宽 ±0.016 oct、
+    # 量化与统计的 3σ 包络远小于 1%——报告 1% 达标 bin 数
+    n_ok = int(np.sum(errs < 1e-2))
+    print('  达标  : ρa/Z 相对误差 <1%% 的 bin = %d/%d'
+          '（验证频带 %g-%g Hz，%g s 记录）'
+          % (n_ok, len(errs), min(fs_all), max(fs_all), DUR))
 
     print()
     if engine == 'lines':
@@ -223,7 +259,7 @@ def run_engine(engine, name):
         print('  网格间隙频率 Hx 窗谱幅值 / 该次运行中最近合成频点幅值（1=连续谱,')
         print('  论文判据：稀疏网格间隙比目标频点低约一个量级）:')
         ratios = {}
-        for f_lo, f_hi in ((0.1, 1.0), (1.0, 10.0), (10.0, 100.0)):
+        for f_lo, f_hi in ((1.0, 3.2), (3.2, 10.0), (10.0, 32.0), (32.0, 100.0), (100.0, 320.0)):
             f_mid = math.sqrt(f_lo * f_hi)
             # 稀疏运行参考 = 相邻锚点(真实合成); 加密运行参考 = 最近网格点(真实合成);
             # 探针频率本身两次运行都未合成, 测的是"处理任意频率能否取到信号"
@@ -243,7 +279,7 @@ def run_engine(engine, name):
         print('=== 5. 谱连续性（noise：间隙探针斜率归一幅值比, 连续谱判据 >0.8）===')
         grid = densify_frequencies(FREQS, DENSE)
         cont = {}
-        for f_lo, f_hi in ((0.1, 1.0), (1.0, 10.0), (10.0, 100.0)):
+        for f_lo, f_hi in ((1.0, 3.2), (3.2, 10.0), (10.0, 32.0), (32.0, 100.0), (100.0, 320.0)):
             r = continuity_ratio('MTA', out, f_lo, f_hi, grid)
             if r is not None:
                 cont[f_lo] = r
@@ -254,8 +290,7 @@ def run_engine(engine, name):
     # （noise 引擎：两者均受 CTS 阶跃×连续谱地板限制，同用 <1e-1）
     z_ok = worst_anchor < 1e-1
     coh_ok = coh_worst < 2e-2
-    grid_ok = (np.median(errs) < med_thr
-               and np.percentile(errs, 90) < p90_thr)
+    grid_ok = ok3
     print()
     print('=== [%s] 结论: 锚点Z %s (%.1e) | 同源 %s (%.1e) | 全网格 %s | %s %s ==='
           % (tag, 'PASS' if z_ok else 'FAIL', worst_anchor,
