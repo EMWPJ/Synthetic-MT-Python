@@ -271,6 +271,9 @@ class NoiseSource:
             if self.alpha2 > 0 and centers:
                 gref = sample_chain(gamma_arr[0], gamma_arr[1], t_axis, 0.0) \
                     if gamma_arr is not None else None
+                # 带间共享同一白噪（相干带合成，v2.1）：交点处两带成分
+                # 完全相干，混合平滑——独立实现会使带交点 bin 的有效 Z
+                # 随两带突发权重随机摆动（曾致带交点 bin ~12% 偏差）
                 for fc in centers:
                     mask = masks[fc]
                     eg, eh = seg_chains[(fc, 0)], seg_chains[(fc, 1)]
@@ -280,13 +283,14 @@ class NoiseSource:
                     if gref is not None:
                         g[0] *= gref
                         g[1] *= gref
-                    for pi in range(2):
-                        w = rng_noise.standard_normal(n0)
-                        nb = np.fft.irfft(mask * np.fft.rfft(w), n=n0)
-                        if pi == 0:
-                            p1 = p1 + (amp_l2 * g[0]) * nb
-                        else:
-                            p2 = p2 + (amp_l2 * g[1]) * nb
+                    w = rng_noise.standard_normal(n0)
+                    spec = np.fft.rfft(w)
+                    nb1 = np.fft.irfft(mask * spec, n=n0)
+                    w2 = rng_noise.standard_normal(n0)   # 极化独立白噪
+                    spec2 = np.fft.rfft(w2)
+                    nb2 = np.fft.irfft(mask * spec2, n=n0)
+                    p1 = p1 + (amp_l2 * g[0]) * nb1
+                    p2 = p2 + (amp_l2 * g[1]) * nb2
             if state['events']:
                 e1, e2 = _render_events(state['events'], t_axis, a_ref_ev,
                                         0.4 * sr0)
