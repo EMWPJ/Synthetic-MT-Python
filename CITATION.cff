@@ -3,7 +3,7 @@ message: >-
   If you use this software in your research, please cite it using the
   metadata from this file, and please also cite the method paper listed
   as the preferred-citation.
-title: Synthetic-MT (synthts)
+title: Synthetic MT TimeSeries (SMTTS), Python edition (synthts)
 version: 1.9.0
 date-released: "2026-10-22"
 authors:

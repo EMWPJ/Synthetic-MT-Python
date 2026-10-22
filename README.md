@@ -1,4 +1,4 @@
-# Synthetic-MT · synthts — Phoenix-format MT/AMT synthetic time series
+# Synthetic MT TimeSeries (SMTTS) — Python · synthts
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
@@ -10,9 +10,10 @@
 
 `synthts` turns **XMLSITE forward-model files** into calibrated **Phoenix TS2–TS5 + TBL
 binary time series**, and ships a minimal MT processor (`mtprocess`) that verifies the
-synthetic data against the model's theoretical impedance. It is the CLI + Python-library
-successor of the Delphi-based [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries);
-the synthesis method is that of Wang et al. (2023), cited in full below. Version 1.9 is a lean,
+synthetic data against the model's theoretical impedance. It inherits the name and
+method of the Delphi-based original, [Synthetic MT TimeSeries (SMTTS)](https://github.com/EMWPJ/SyntheticMTTimeSeries),
+and continues it as a lean CLI + Python library; the synthesis method is that of
+Wang et al. (2023), cited in full below. Version 1.9 is a lean,
 scriptable, AI-agent-friendly line of this repository: one algorithm, one pipeline,
 numpy as the only runtime dependency.
 
@@ -214,7 +215,7 @@ pytest -m slow        # four-gate end-to-end demo
 
 ## Related projects
 
-- [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries) — original Delphi implementation
+- [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries) — the original Delphi implementation (this project inherits its name)
 - [Modified-ModEM](https://github.com/EMWPJ/Modified-ModEM-with-output-electromagnetic-field-values) — ModEM with EM field output (source of forward-model files)
 
 ## License
@@ -225,7 +226,9 @@ pytest -m slow        # four-gate end-to-end demo
 
 ## 中文
 
-# Synthetic-MT（synthts）— Phoenix 格式 MT/AMT 合成时间序列
+# Synthetic MT TimeSeries（SMTTS）Python 版 — Phoenix 格式 MT/AMT 合成时间序列
+
+项目名继承自 Delphi 原版 [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries)。
 
 把 **XMLSITE 正演模型**合成为带内置标定的 **Phoenix TS2–TS5 + TBL 二进制时间序列**，
 并附带极简 MT 处理器 `mtprocess` 验证合成数据与理论阻抗一致。v1.9 是本仓库的精简线：

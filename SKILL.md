@@ -5,6 +5,8 @@ description: Synthesize Phoenix-format MT/AMT time series from XMLSITE forward m
 
 # synthts — AI agent playbook
 
+Project: **Synthetic MT TimeSeries (SMTTS), Python edition** — inherits the name of
+the Delphi original; the tool/package is `synthts`.
 XMLSITE forward-model file(s) in → calibrated Phoenix TS2–TS5 + TBL binary out.
 Single algorithm (RandomSegmentPartiallyWindowed, Wang et al. 2023). Python 3.10+,
 numpy only. Package name `synthts`; also usable as a Python library (`synthts.cli.main`,

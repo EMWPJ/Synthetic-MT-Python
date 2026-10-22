@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "synthetic-mt"
+name = "smtts"
 version = "1.9.0"
-description = "Synthesize Phoenix-format MT/AMT time series from XMLSITE forward models: single algorithm, built-in calibration, coherently-paired multi-site batches"
+description = "Synthetic MT TimeSeries (SMTTS) Python edition: synthesize Phoenix-format MT/AMT time series from XMLSITE forward models - single algorithm, built-in calibration, coherently-paired multi-site batches"
 readme = "README.md"
 license = {text = "GPL-3.0"}
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ authors = [
     {name = "Chen Xuan"},
     {name = "Zhang Yong"}
 ]
-keywords = ["magnetotelluric", "mt", "amt", "time-series", "synthesis", "phoenix", "remote-reference", "geophysics"]
+keywords = ["smtts", "magnetotelluric", "mt", "amt", "time-series", "synthesis", "phoenix", "remote-reference", "geophysics"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
