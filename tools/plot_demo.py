@@ -4,8 +4,9 @@
 Synthesizes one layered-model site, then draws two figures (fixed output
 directory ./plot_out under the current working directory):
 
-  1. fig_time_series.png — five-channel stacked traces at the three sampling rates
-     2400/150/15 Hz (paper Fig 5A-C) plus the amplitude spectrum across the
+  1. fig_time_series.png — four-channel stacked traces at the three sampling rates
+     2400/150/15 Hz (paper Fig 5A-C style; a 1D model has no vertical magnetic
+     field, so Hz is not drawn) plus the amplitude spectrum across the
      dense grid (paper Fig 5D);
   2. fig_rho_phase.png — apparent resistivity and phase estimated from the synthetic
      time series (least squares) vs the 1D forward theory (paper Fig 6 style:
@@ -40,9 +41,6 @@ DENSE, DUR, PERIODS, SEED, SCALE = 10.0, 3600.0, 128, 42, 10.0
 # 段长同步 128 周期——加密越密，8 周期处理窗主瓣内的邻频段越多
 # （10/oct 时 +/-0.32 倍频程约 6 个），散射随段长线性下降，需更长分段抵消
 H0 = 0.02                         # source magnetic field amplitude (A/m)
-# Hz 展示信号：纯 1D 的垂直磁场恒为零（Tzx=0），此处给 Hz_p = 0.05·Hx_p 的
-# 弱倾子式分量，让五通道在图中都可见（不影响 Z 的合成与验证）
-TIPPER = 0.05
 # 论文原理（Wang et al. 2023）：合成中每个通道都同时含有两个极化源的信号，
 # 两极化各自独立分窗、独立强度（引擎侧 pol1 幅值~N(1,1)、pol2~U(0,2)，段长
 # 与相位独立抽签），叠加产生极化方向随时间的变化。因此模型的两极化必须
@@ -89,24 +87,25 @@ def build_model(path):
                        ('Ex2', e2[0]), ('Ey2', e2[1]),
                        ('Hx2', h2[0]), ('Hy2', h2[1])):
             lines.append('    <%s>%s</%s>' % (tag, cstr(v), tag))
-        hz1, hz2 = TIPPER * h1[0], TIPPER * h2[0]
-        lines.append('    <Hz1>%s</Hz1><Hz2>%s</Hz2>' % (cstr(hz1), cstr(hz2)))
+        # 纯 1D：垂直磁场恒为零（Hz1=Hz2=0，Tzx 不参与合成）
+        lines.append('    <Hz1>0,0</Hz1><Hz2>0,0</Hz2>')
         lines.append('  </Fields>')
     lines.append('</Site>')
     Path(path).write_text(chr(10).join(lines) + chr(10), encoding='utf-8')
 
 
 def _stack(ax, ts_path, fs_hint, n_show, title):
+    """四通道堆叠（Ex/Ey/Hx/Hy）；1D 模型的 Hz 恒为零，不绘制。"""
     sr, data = mtprocess.read_ts(ts_path)
     fs = sr or fs_hint
     t = np.arange(n_show) / fs
-    for c, name in enumerate(('Ex', 'Ey', 'Hx', 'Hy', 'Hz')):
+    for c, name in enumerate(('Ex', 'Ey', 'Hx', 'Hy')):
         x = data[c][:n_show]
         sd = float(x.std()) or 1.0
-        ax.plot(t, (x - x.mean()) / sd + 3.0 * (4 - c), lw=0.6, color='k')
-    ax.set_yticks([3.0 * k for k in range(5)])
-    # 刻度按升序配标签：轨迹偏移为 Ex=12(顶)...Hz=0(底)，标签须倒序贴
-    ax.set_yticklabels(['Hz', 'Hy', 'Hx', 'Ey', 'Ex'])
+        ax.plot(t, (x - x.mean()) / sd + 3.0 * (3 - c), lw=0.6, color='k')
+    ax.set_yticks([3.0 * k for k in range(4)])
+    # 刻度按升序配标签：轨迹偏移为 Ex=9(顶)...Hy=0(底)，标签须倒序贴
+    ax.set_yticklabels(['Hy', 'Hx', 'Ey', 'Ex'])
     ax.set_title(title)
     ax.set_xlim(0, t[-1])
 
