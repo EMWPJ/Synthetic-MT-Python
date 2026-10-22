@@ -74,3 +74,5 @@ for k in (8, 11, 16, 9, 15, 20):
 
 # 理论 4 通道谱（无噪声理想渲染）在同一 bin 的形状对照
 shutil.rmtree(out, ignore_errors=True)
+
+
