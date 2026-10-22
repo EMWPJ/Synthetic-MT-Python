@@ -10,7 +10,9 @@
 
 `synthts` turns **XMLSITE forward-model files** into calibrated **Phoenix TS2–TS5 + TBL
 binary time series**, and ships a minimal MT processor (`mtprocess`) that verifies the
-synthetic data against the model's theoretical impedance. Version 1.9 is a lean,
+synthetic data against the model's theoretical impedance. It is the CLI + Python-library
+successor of the Delphi-based [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries);
+the synthesis method is that of Wang et al. (2023), cited in full below. Version 1.9 is a lean,
 scriptable, AI-agent-friendly line of this repository: one algorithm, one pipeline,
 numpy as the only runtime dependency.
 
@@ -48,7 +50,8 @@ Method reference:
 This line deliberately drops the former kitchen-sink feature set: the six synthesis
 algorithms (only `RANDOM_SEG_PARTIAL` survives), the PySide6 GUIs, noise injection,
 ModEM import, GMT/CSV/NumPy exporters and the 1D workflow shell. They remain available
-in the git history and older releases.
+under the [`v1.8-legacy`](https://github.com/EMWPJ/Synthetic-MT-Python/tree/v1.8-legacy)
+tag — the last pre-rewrite state — and the git history.
 
 ## Installation
 
@@ -59,6 +62,9 @@ git clone https://github.com/EMWPJ/Synthetic-MT-Python.git
 cd Synthetic-MT-Python
 pip install -e .
 ```
+
+If the `synthts` command is not on your `PATH` afterwards (a user-site Scripts directory
+is common on Windows), use `python -m synthts` instead — both entry points are equivalent.
 
 ## Quick start
 
@@ -237,8 +243,11 @@ synthts -model examples/mta.XMLSITE examples/mtb.XMLSITE -out out_pair -dur 3600
 python tools/mt_e2e_demo.py                                              # 四闸门验证（锚点Z/同源性/全网格Z/PSD连续性）
 ```
 
+机器可读摘要（stdout 末行，不写入 `-log`）：
+`SYNTHTS_SUMMARY {"mode": "MT", "sites": ["MTA"], "n_files": 5, "files": [...]}`。
+
 时间起点固定 2050-01-01 00:00:00；`-dur` 缺省 AMT=3600s、MT=72h；退出码 0 成功 / 2 失败。
 完整参数表与 JSON 摘要字段见英文部分。v1.9 删除了旧版的六算法、PySide6 GUI、噪声注入、
-ModEM 导入与 GMT/CSV 输出（保留在 git 历史与旧版发布中）。
+ModEM 导入与 GMT/CSV 输出（旧状态钉在 [`v1.8-legacy`](https://github.com/EMWPJ/Synthetic-MT-Python/tree/v1.8-legacy) 标签）。
 
 许可证：GPL-3.0。

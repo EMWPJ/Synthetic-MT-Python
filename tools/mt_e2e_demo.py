@@ -12,7 +12,7 @@
      稀疏锚点 <1e-2、常 Z 对照 median<1e-2）；
   4) PSD 连续性（论文质量判据）：稀疏 vs 加密在网格间隙频率的窗谱幅值比。
 
-用法（在 SynthTSPy 包根目录执行）:
+用法（在仓库根目录执行）:
   python tools/mt_e2e_demo.py [输出目录名]
 """
 import math

@@ -10,6 +10,10 @@ Single algorithm (RandomSegmentPartiallyWindowed, Wang et al. 2023). Python 3.10
 numpy only. Package name `synthts`; also usable as a Python library (`synthts.cli.main`,
 `synthts.mtprocess`).
 
+Repository: https://github.com/EMWPJ/Synthetic-MT-Python (GPL-3.0).
+Method paper: Wang P, Chen X, Zhang Y (2023), Frontiers in Earth Science 11:1086749,
+https://www.frontiersin.org/articles/10.3389/feart.2023.1086749
+
 ## Install (once, in the repo root)
 
 ```bash

@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software in your research, please cite it using the
+  metadata from this file, and please also cite the method paper listed
+  as the preferred-citation.
+title: Synthetic-MT (synthts)
+version: 1.9.0
+date-released: "2026-10-22"
+authors:
+  - family-names: Wang
+    given-names: Peijie
+  - family-names: Chen
+    given-names: Xuan
+  - family-names: Zhang
+    given-names: Yong
+repository-code: "https://github.com/EMWPJ/Synthetic-MT-Python"
+license: GPL-3.0
+type: software
+keywords:
+  - magnetotellurics
+  - audio-magnetotellurics
+  - synthetic data
+  - time series
+  - geophysics
+  - remote reference
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Wang
+      given-names: Peijie
+    - family-names: Chen
+      given-names: Xuan
+    - family-names: Zhang
+      given-names: Yong
+  title: Synthesizing magnetotelluric time series based on forward modeling
+  journal: Frontiers in Earth Science
+  volume: 11
+  pages: 1086749
+  year: 2023
+  doi: 10.3389/feart.2023.1086749
