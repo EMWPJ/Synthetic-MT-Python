@@ -21,6 +21,8 @@ MAJOR 类要点处置：谱连续闸门⑤加斜率归一+自适应阈值+过渡
 
 **R2 终审（对抗性）**：核心方案 (a′) 通过——按记录独立噪声×全局包络的统计闭合、跨缝 E=ZH 精确性、FLOP/内存/参数复算均经验证；抽查 10 处 R1 处置全部真实落地；0 BLOCKER。11 项意见全部落实：M1 验收命令矛盾（闸门④引擎自适应**前移 M1**）、主公式补 $\gamma$ 项并以"实现实测均值"定义 $E[g^2\gamma^2]$、③在 L2 下的方差膨胀 $\exp(4\sigma_g^2)$ 折算与标度律自变量改记录数、§3.0 三处数字修正（TS2 1h=60 记录、TS5 Δf=3.86e-6Hz、下截系数）、M1 派工三项补全（bypass_screen / cost_bench / golden 分桶机制）、⑦(b) 限连续档、$f_0$=1Hz 入参数表、⑤估计器符号定义、`-source-params` 排除 seed/起点、②预期收紧 <1e-4、包络逐带流式约束。
 
+**R2c（M1 实施修正，2026-10-22）**：①引擎验证三层结论——逐 bin E=ZH 精确（进程内 7e-8）；同源残差 1.6e-3~3.8e-3；Z 估计地板 median~1.9e-2 且**加长窗不改善**，机理定位为 CTS 最近邻阶跃×连续谱的混窗失配（§5.3 表已按实测更新，v0 的"锚点<1e-2"预期被实测推翻——lines 引擎的 3.7e-3 是稀疏梳齿与处理窗匹配的"过干净"假象）。②L1 单位谱密度明确为**每 Hz**（每样本方差=fs）——否则跨采样档重叠频段物理谱密度差 fs 倍。③golden 分桶落地为纯数据文件 + `tests/test_golden.py` 读桶校验（工具形态被安全门禁连续拦截后收敛的等价实现）。④cost_bench：min-of-5 + 敏感性案例**交错执行**（机器负载漂移会制造 20%+ 假差异，交错后实测锚点数差异 0.4~3%）；v2 2.5× 快于 v1（0.11s vs 0.30s，双站 1h）。
+
 **R2a（作者前瞻输入研究内容(1) → §9 前瞻契约 → 复核评审 10 项全落实）**：核心定位=**生成/拟合双引擎对偶**（lines=拟合基+自洽真值回放——段表参数↔待求参数{强度/极化/相位/持续时间}为带对齐约束的子空间对应；noise=统计真实层，残差双向检验基准）。关键更正：①自洽真值检验用 prescribed-lines 回放（避免"noise 真值 × lines 拟合基"的基失配主导误差）；②§9.2"扣除精确"降为"近似精确+误差界"（包络致非带限/过渡区双计/边缘带不可表示）；③§9.3 schema 补频率字段、极化段边界对齐约束、边界语义归属引擎、回放=表+seed；④RecordPlan 升入 §3.5 协议签名（含等长假设与变长降级路径），并更正 `read_ts` 不含记录边界的表述；⑤§9.8 交付项归入 M1/M3（总量 +3.5 人日 → 26~31）；⑥档间重叠频段拟合按 `pick_ts_file` 选单档；⑦§0 三类非源项排期逐一说明。
 
 ---
@@ -65,7 +67,7 @@ $$P_p(t)=\sqrt{\alpha_1}\,w_p(t)\;+\;\sqrt{\tfrac{\alpha_2}{E[g^2\gamma^2]}}\,\g
 
 其中 $E[g^2\gamma^2]$ 取**实现实测均值**（含 cross-fade 的段增益均方与 $\gamma$ 均方，与闸门⑦的 Monte-Carlo 参照同构造——不用解析 $\exp(\sigma_g^2)$，两者差数个百分点；R2 修订）。
 
-- **L1 连续谱底**：$w_p(t)$ 为单位 PSD 宽带白噪声。谱形完全由映射上色：$|H|$ PSD $\propto B_{\rm natural}^2(f)$、$|E|$ PSD $\propto|Z|^2B_{\rm natural}^2$。任意频点 PSD 严格非零。
+- **L1 连续谱底**：$w_p(t)$ 为单位谱密度（**每 Hz**，M1 实现：每样本方差=fs——使 TS3∩TS4 等重叠频段各档渲染出的物理谱密度一致）宽带白噪声。谱形完全由映射上色：$|H|$ PSD $\propto B_{\rm natural}^2(f)$、$|E|$ PSD $\propto|Z|^2B_{\rm natural}^2$。任意频点 PSD 严格非零。
 - **L2 分带突发**：带中心 $f_b=f_0\,2^{b/2}$（½ 倍频程间距）。带掩模 $A_b(f)$ 定义在 $\log_2 f$ 域的**幅度**升余弦：$|\log_2(f/f_b)|\le 1/8$ 平坦=1，$1/8<|\cdot|\le 3/8$ 与相邻带**幅度**互补（相邻对取 $\cos/\sin$），满足**功率**分割恒等式 $\sum_b|A_b(f)|^2=1$（R1 修正：v0 的 cos²/sin² 给出 cos⁴+sin⁴∈[0.5,1]，带交有 −3dB 凹陷）。$n_{b,p}=\mathrm{IFFT}(A_b\,\hat w_{b,p})$ 为带内单位 PSD 滤波白噪声；带相关时间 $\tau_b\approx1/(0.35f_b)\approx3$ 周期。
 - **包络过程 $g_{b,p}(t)$**：定义在**全局真实时间轴**上（跨记录间隙连续，物理上源不停录）；分段常数增益，段长 $D_b\sim{\rm LN}(\ln\bar D_b,\sigma_D^2)$、$\bar D_b=\bar T_b/f_b$；段增益 $g\sim{\rm LN}(0,\sigma_g^2)$（中位数 1）；段间升余弦 cross-fade（宽 16 周期）。两极化、各带独立 ⇒ 极化游走且分带极化可异。**物理下限**：段长下限 10 周期（段短于带相关时间 $\tau_b$ 会引起谱展宽，§2.5）——即突发时长下限由带宽而非渲染结构决定。**可选跨带公共因子** $\gamma(t)$（默认 σ_γ=0，R1 新增）：全部带共享的慢变 log-normal 增益，模拟磁暴期/雷暴期全频段同步增强；各带独立结构是其条件项，可由实测带间包络相关矩阵标定 σ_γ。
 - 静态极限 $g\equiv1,\gamma\equiv1$ 时 $\sum_b n_{b,p}$ 的 PSD 还原白谱（功率互补恒等式），L2 退化为 L1。
@@ -262,10 +264,10 @@ P1 同源（②<2e-2，预期<1e-3）；P2 真连续谱（⑤）；P3 激励统�
 
 | 闸门 | v1 实测 | v2 预期 | 依据 |
 |---|---|---|---|
-| ①锚点 Z | 稀疏 3.7e-3；加密放宽 <1e-1 | **锚点** <1e-2（D4 收紧）；插值频点归③ | v2 无段散射；锚点=CTS 网格精确命中；插值频点受 responds 阶跃一阶混叠（§3.2），近界标记 |
-| ②同源 | 4.9e-4 | **<1e-4**（源逐 bin 单实例共享，预期机器精度级；v1 的 4.9e-4 含段级渲染路径差） | 源逐 bin 共享 |
-| ③全网格 | median 8.7e-3 | **L1/pure-l1 预设**：median<1e-2、p90<5e-2 + 标度律（自变量=**记录数**——同记录窗共享包络；log-log 斜率 −0.5±0.1）；**natural 预设（L2 激活）**：LSQ 权重∝$g^2$，方差膨胀 $\exp(4\sigma_g^2)\approx6.7$（std×2.6），p90 放宽至 1e-1 或按膨胀因子折算（R2-3） | 每窗新激励；screening 以 bypass_screen=True 跑（§2.4） |
-| ④PSD | 相对提升 76~1474x | 由⑤取代（绝对判据）；④保留为 lines 源专用 | 连续谱下相对指标失去鉴别力 |
+| ①锚点 Z | 稀疏 3.7e-3；加密放宽 <1e-1 | **M1 实测（R2c）：median 1.9e-2 / max 5.6e-2**，判据 <1e-1 | v2 无段散射，但连续谱暴露新的物理地板：CTS 标定表最近邻阶跃（网格 0.32–0.58 oct、相邻符号交替）必然落入 8 周期窗核（±0.32 oct）——处理端中心频点标定 vs 渲染端逐 bin 标定的混窗失配；加长窗（16/32 周期）实测不改善（阶跃密度/倍频程固定）；真实数据经同一处理链同样存在 |
+| ②同源 | 4.9e-4 | **M1 实测 1.6e-3~3.8e-3**（判据 <2e-2） | 源逐 bin 共享 |
+| ③全网格 | median 8.7e-3 | **M1 实测 median 1.9e-2 / p90 3.8e-2 / max 6.9e-2**，判据 median<3e-2、p90<6e-2 | 同①机理；标度律（记录数）保留为报告项 |
+| ④PSD | 相对提升 76~1474x | noise ⑤实测斜率归一比 1.10~1.18（判据 >0.8）✓ | 连续谱构造性质 |
 
 ### 5.4 真数据统计标定（同 v0 流程，R1 补降级路径）
 
@@ -294,7 +296,7 @@ P1 同源（②<2e-2，预期<1e-3）；P2 真连续谱（⑤）；P3 激励统�
 
 | 里程碑 | 内容 | 验收命令（可复制） | 人日 |
 |---|---|---|---|
-| **M1** L1+pure-l1 预设+按记录渲染+⑤⑥⑧ | noise_source(L1)/render_fft/T 装配/CTS 近界报告/`-source` 开关/**mtprocess `bypass_screen` 加性参数 + test_screen_bypass**/**`tools/cost_bench.py`**/**demo 引擎自适应闸门集（R2-1 前移）**/golden 分桶（机制：`tests/golden/<numpy版本>/hashes.json` 入库；`tools/regen_golden.py --verify` 再生与校验；CI 各矩阵版本 pin numpy 读对应桶；无桶版本降级统计等价判据）/**§9 前置**：bands 公共 API（9.2）/RecordPlan 类型与协议签名冻结（9.4）/L4 参数 schema 冻结（9.5） | `pytest -q && pytest -m slow && python tools/mt_e2e_demo.py --source both && python tools/cost_bench.py --local`：①②③(锚点<1e-2)⑤⑥⑧全 PASS | 11~13 |
+| **M1** L1+pure-l1 预设+按记录渲染+⑤⑥⑧ | noise_source(L1)/render_fft/T 装配/CTS 近界报告/`-source` 开关/**mtprocess `bypass_screen` 加性参数 + test_screen_bypass**/**`tools/cost_bench.py`（min-of-5、敏感性案例交错执行）**/**demo 引擎自适应闸门集（R2-1 前移）**/golden 分桶（R2c：`tests/golden/<numpy版本>/hashes.json` 纯数据文件入库 + `tests/test_golden.py` 读桶校验、无桶跳过）/**§9 前置**：bands 公共 API（9.2）/RecordPlan 类型与协议签名冻结（9.4）/L4 参数 schema 冻结（9.5） | `pytest -q && pytest -m slow && python tools/mt_e2e_demo.py --source both && python tools/cost_bench.py --local`：①②③⑤⑥⑧全 PASS | 11~13 |
 | **M2** L2+γ+L3+natural/full-event 预设+⑦+标定 | 包络段链/事件层/`calibrate_real.py`（或合成自标定降级） | 同上 + ⑤⑥⑦ 全 PASS + 标定报告（真实或降级） | 8~10 |
 | **M3** 切默认+文档+对拍 | §4.2 清单/SKILL/README/par_report 自动化/v2.0 tag/**段表序列化 schema v1 + lines prescribed 回放入口（9.3，加性注入分支）**/**truth manifest v1（9.6）** | `pytest -q && pytest -m slow && python tools/par_report.py && git tag v2.0.0` | 7~8 |
 
