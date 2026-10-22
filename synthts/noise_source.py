@@ -139,8 +139,9 @@ def diurnal_gain(t_axis, level_db):
 def add_l4_noise(X, rng, fs, t_axis, l4_type, level_db):
     """L4 加性噪声（逐通道、与源独立；level 相对**该记录该通道 RMS**）。
 
-    white：高斯；powerline：50Hz 谐波族（至 Nyquist，每记录随机初相）；
-    impulsive：稀疏尖峰（泊松到达、重尾幅度）。
+    white：高斯；impulsive：稀疏尖峰（泊松到达、重尾幅度）。
+    不建模工频谐波——实测 Phoenix 数据经仪器前端陷波，工频已不在数据中
+    （作者确认，2026-10-22）。
     """
     if l4_type == 'none' or level_db <= -120.0:
         return X
@@ -153,17 +154,6 @@ def add_l4_noise(X, rng, fs, t_axis, l4_type, level_db):
         sigma = sig * amp
         if l4_type == 'white':
             out[c] += rng.standard_normal(len(out[c])) * sigma
-        elif l4_type == 'powerline':
-            harm = []
-            k = 1
-            while 50.0 * k < 0.45 * fs:
-                harm.append(50.0 * k)
-                k += 1
-            if harm:
-                a = sigma / math.sqrt(0.5 * len(harm))
-                for fh in harm:
-                    out[c] += a * np.sin(2.0 * math.pi * fh * t_axis
-                                         + rng.uniform(0, 2 * math.pi))
         elif l4_type == 'impulsive':
             rate = max(len(out[c]) / 5000.0, 1e-6)
             n = int(rng.poisson(rate))

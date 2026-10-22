@@ -39,14 +39,16 @@ PARAM_SCHEMA = {
     'l4_level_db': (float, -60.0, 0.0),       # L4 加性噪声水平（相对通道 RMS）
 }
 
-# 枚举型参数（validate 特判）
-_ENUM_PARAMS = {'l4_type': ('none', 'white', 'powerline', 'impulsive')}
+# 枚举型参数（validate 特判）。工频不建模：实测 Phoenix 数据经仪器前端
+# 陷波，工频已不在数据中（作者确认）
+_ENUM_PARAMS = {'l4_type': ('none', 'white', 'impulsive')}
 
-# L4 加性噪声层参数 schema（§9.5 冻结；M4 实现，v2.0 仅占位校验）
+# L4 加性噪声层参数 schema（§9.5 冻结；v2.1 已实现 white/impulsive）。
+# 工频不建模：实测 Phoenix 数据经仪器前端陷波，工频已不在数据中
 L4_SCHEMA = {
-    'type': ('white', 'pink', 'powerline', 'impulsive', 'playback'),
+    'type': ('white', 'pink', 'impulsive', 'playback'),
     'level_db': (float, -120.0, 0.0),   # 相对通道 RMS 的加性水平
-    'spectrum': (str, None),            # 谱形描述（pink/powerline 细项）
+    'spectrum': (str, None),            # 谱形描述（pink 细项）
     'per_channel': (dict, None),        # 每通道覆盖
     'playback_file': (str, None),       # 实测噪声回放文件（type=playback）
 }
