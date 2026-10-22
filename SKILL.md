@@ -79,6 +79,17 @@ seeds 7/123).
 `examples/example_mtprocess.py` — `synthts.cli.main(...)` then
 `mtprocess.process(model, out_dir)` → per-frequency `(freq, Z_est, Z_theory, nwin, max_rel_err)`.
 
+### 5. Paper-style figures (Wang et al. 2023, Fig 5/6 style)
+
+```bash
+pip install -e ".[plot]"     # once, adds matplotlib
+python tools/plot_demo.py    # writes ./plot_out/time_series.png + rho_phase.png
+```
+
+Layered 1D demo model; five-channel traces at 2400/150/15 Hz, amplitude spectrum,
+and apparent resistivity/phase (LSQ) vs theory (b-o theory line, r--x processed,
+Period axis).
+
 ## Behaviour notes
 
 - `-mode MT` → TS3/TS4/TS5; `-mode AMT` → TS2/TS3/TS4. AMT TS2 runs at 24 kHz — a 1 h

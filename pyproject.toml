@@ -31,7 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "matplotlib"]
+plot = ["matplotlib"]
 
 [project.urls]
 Homepage = "https://github.com/EMWPJ/Synthetic-MT-Python"

@@ -43,6 +43,8 @@ Thumbs.db
 
 # Output
 output/
+plot_out/
+mt_e2e_out/
 *.png
 *.pdf
 *.npy

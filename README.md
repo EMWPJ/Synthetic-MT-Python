@@ -67,6 +67,8 @@ pip install -e .
 If the `synthts` command is not on your `PATH` afterwards (a user-site Scripts directory
 is common on Windows), use `python -m synthts` instead — both entry points are equivalent.
 
+The paper-style figures additionally need matplotlib: `pip install -e ".[plot]"`.
+
 ## Quick start
 
 ```bash
@@ -169,6 +171,22 @@ and 35° rotated geometry), then checks:
 The full demo passes on seed 42; the marginal dense-grid gate was additionally
 verified on seeds 7 and 123.
 
+## Paper-style figures
+
+```bash
+pip install -e ".[plot]"
+python tools/plot_demo.py        # writes ./plot_out/
+```
+
+Draws two figures in the style of Wang et al. (2023) for a three-layer demo model
+(100/10/1000 Ω·m, H-type curve):
+
+- `time_series.png` — five-channel stacked traces at the 2400/150/15 Hz sampling
+  rates plus the amplitude spectrum across the dense grid (paper Fig 5);
+- `rho_phase.png` — apparent resistivity and phase estimated from the synthetic
+  series by least squares vs the 1D forward theory (paper Fig 6 style: blue
+  circles line = theory, red dashed crosses = processed, Period axis).
+
 ## Performance (reference: MT mode, dense=4, periods=64, NVMe)
 
 | Job | Time | Output size |
@@ -185,7 +203,8 @@ Synthetic-MT-Python/
 │   └── assets/         # built-in TBL/CLB/CLC instrument sets (MT + AMT)
 ├── examples/           # ready-to-run XMLSITE models + Python API example
 ├── tools/
-│   └── mt_e2e_demo.py  # four-gate end-to-end verification
+│   ├── mt_e2e_demo.py  # four-gate end-to-end verification
+│   └── plot_demo.py    # paper-style figures (matplotlib extra)
 ├── tests/              # pytest: smoke (MT/AMT/determinism) + slow four-gate e2e
 ├── SKILL.md            # playbook for AI agents calling the CLI
 ├── pyproject.toml
@@ -196,7 +215,7 @@ Synthetic-MT-Python/
 
 ```bash
 pytest                # smoke: MT + AMT CLI runs, JSON summary, same-seed determinism
-pytest -m slow        # four-gate end-to-end demo
+pytest -m slow        # four-gate end-to-end demo + paper-style figures
 ```
 
 ## Citation
