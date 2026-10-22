@@ -1,338 +1,198 @@
-# SyntheticMT - Magnetotelluric Time Series Synthesis
+# Synthetic-MT · synthts — Phoenix-format MT/AMT synthetic time series
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Python Version](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-green.svg)](https://www.python.org/)
+[![numpy only](https://img.shields.io/badge/dependency-numpy%20only-orange.svg)](https://numpy.org/)
 
 **English** | [中文](#中文)
 
-## Overview
+## What this is
 
-SyntheticMT is a Python library for synthesizing magnetotelluric (MT) time series based on forward modeling. It provides a complete implementation of the method described in:
+`synthts` turns **XMLSITE forward-model files** into calibrated **Phoenix TS2–TS5 + TBL
+binary time series**, and ships a minimal MT processor (`mtprocess`) that verifies the
+synthetic data against the model's theoretical impedance. Version 1.9 is a lean,
+scriptable, AI-agent-friendly line of this repository: one algorithm, one pipeline,
+numpy as the only runtime dependency.
 
-> Wang P, Chen X, Zhang Y (2023) [Synthesizing magnetotelluric time series based on forward modeling](https://www.frontiersin.org/articles/10.3389/feart.2023.1086749/full). *Frontiers in Earth Science* 11:1086749.
+```
+XMLSITE model(s) → built-in calibration → coherently-paired synthesis
+                  → Phoenix TS2–TS5 + TBL on disk → mtprocess verification
+```
 
-This project is a Python reimplementation of the original [Delphi-based SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries), designed to be more Pythonic, user-friendly, and suitable for integration with modern Python scientific computing workflows.
+Method reference:
+
+> Wang P, Chen X, Zhang Y (2023). [Synthesizing magnetotelluric time series based on
+> forward modeling](https://www.frontiersin.org/articles/10.3389/feart.2023.1086749/full).
+> *Frontiers in Earth Science* 11:1086749.
+
+### Highlights
+
+- **Single algorithm** — `RandomSegmentPartiallyWindowed` (random-length segments with
+  partial Hanning overlap) simulates natural source polarization variability. Nothing else.
+- **Built-in calibration** — two embedded CTS tables for a reference instrument (Phoenix
+  box 4360 + BMT coils), one set per mode. No external DLLs, no calibration files to find.
+- **Coherently-paired multi-site batches** — pass several models via `-model` and every
+  shared frequency gets identical segment lengths and random amplitude/phase factors
+  across all sites: one source field exciting many sites (remote-reference scenarios).
+- **Log-domain frequency densification** (`-dense`, default 4 points/octave) — anchor
+  frequencies are kept exact, the ten complex field components are interpolated linearly
+  in log10(f); in-gap spectral amplitudes improve 46–518× (the paper's continuity criterion).
+- **Deterministic** — `-seed` (default 42) fixes every random draw; the same command
+  produces byte-identical output.
+- **Machine-readable completion summary** — a final `SYNTHTS_SUMMARY {json}` line on
+  stdout for scripts and AI agents.
+- **Self-verifying** — `tools/mt_e2e_demo.py` checks four quality gates end to end.
+
+### Removed in v1.9
+
+This line deliberately drops the former kitchen-sink feature set: the six synthesis
+algorithms (only `RANDOM_SEG_PARTIAL` survives), the PySide6 GUIs, noise injection,
+ModEM import, GMT/CSV/NumPy exporters and the 1D workflow shell. They remain available
+in the git history and older releases.
 
 ## Installation
+
+Python 3.10+; numpy is the only runtime dependency.
 
 ```bash
 git clone https://github.com/EMWPJ/Synthetic-MT-Python.git
 cd Synthetic-MT-Python
-pip install numpy pyside6
+pip install -e .
 ```
 
-## Quick Start
+## Quick start
+
+```bash
+# 1) Single site — MT mode with defaults (72 h duration, seed 42, dense 4/octave)
+synthts -model examples/mta.XMLSITE -out out_mta
+
+# 2) Multi-site coherently-paired batch (shared random source per frequency)
+synthts -model examples/mta.XMLSITE examples/mtb.XMLSITE -out out_pair -dur 3600
+
+# 3) End-to-end verification — all four gates must print PASS
+python tools/mt_e2e_demo.py
+```
+
+`python -m synthts ...` is equivalent to the `synthts` console command.
+
+## CLI reference
+
+| Option | Default | Description |
+|---|---|---|
+| `-model FILE [FILE ...]` | required | One or more `.XMLSITE` models. Several files = coherently-paired multi-site batch. |
+| `-mode MT\|AMT` | `MT` | `MT` writes TS3/TS4/TS5; `AMT` writes TS2/TS3/TS4. |
+| `-out DIR` | required | Output directory (created if missing). |
+| `-dur SECONDS` | MT: 259200 (72 h); AMT: 3600 | Synthesis duration. |
+| `-periods N` | `4` | Mean segment length in signal periods. Dense grids: ≥ 128 recommended (the e2e demo uses 128). |
+| `-scale X` | `1.0` | Field amplitude factor. |
+| `-rot EX,EY,HX,HY` | `0,0,0,0` | Channel rotations in degrees. |
+| `-seed N` | `42` | numpy Generator seed. Same seed → byte-identical output. |
+| `-dense N` | `4` | Log-domain densification, points per octave (`0` disables). |
+| `-log FILE` | off | Tee the human-readable log to a file. |
+
+Fixed behaviour:
+
+- Start time is pinned to **2050-01-01 00:00:00**; each output TBL's `FTIM`/`LTIM`
+  are rewritten to the actual synthesized span.
+- Exit codes: **0** success, **2** failure (error message on stdout; set the
+  environment variable `SYNTHTS_DEBUG=1` for a full traceback).
+- Duplicate site names are rejected (outputs would collide).
+
+## Machine-readable output
+
+The last line printed to **stdout** is a single-line JSON summary (it is never written
+to the `-log` file):
+
+```
+SYNTHTS_SUMMARY {"tool": "synthts", "version": "1.9.0", "mode": "MT", "models": [...],
+ "sites": ["MTA"], "n_freqs": [51], "schemas": ["TS3", "TS4", "TS5"],
+ "begin": "2050-01-01 00:00:00", "end": "2050-01-04 00:00:00", "dur_s": 259200.0,
+ "periods": 4.0, "scale": 1.0, "rot": "0,0,0,0", "seed": 42, "dense": 4.0,
+ "out_dir": "...", "files": ["...MTA.TBL", "...MTA.TS3", ...], "n_files": 5,
+ "elapsed_s": 3.812}
+```
+
+| Field | Meaning |
+|---|---|
+| `mode`, `models`, `sites` | Mode, input model paths as given, resolved site names. |
+| `n_freqs` | Effective (post-densification) signal frequency count per site. |
+| `schemas` | TS bands written. |
+| `begin`, `end`, `dur_s` | Actual synthesized time span (fixed epoch + duration). |
+| `periods`, `scale`, `rot`, `seed`, `dense` | Effective synthesis parameters. |
+| `files`, `n_files` | Every file written this run (TBL, TS bands, dense XMLSITE). |
+| `elapsed_s` | Wall-clock seconds. |
+
+## Python API
 
 ```python
-from src import SyntheticTimeSeries, SyntheticSchema, SyntheticMethod, create_test_site
-from datetime import datetime
+from synthts.cli import main as synth_main
+from synthts import mtprocess
 
-# Create test site from forward modeling data
-site = create_test_site()
-
-# Configure TS3 acquisition system (2400Hz sampling)
-schema = SyntheticSchema.from_ts('TS3')
-
-# Create synthesizer with default method (RANDOM_SEG_PARTIAL)
-synth = SyntheticTimeSeries(schema, SyntheticMethod.RANDOM_SEG_PARTIAL)
-
-# Generate 1 minute of data
-t1 = datetime(2023, 1, 1, 0, 0, 0)
-t2 = datetime(2023, 1, 1, 0, 1, 0)
-
-ex, ey, hx, hy, hz = synth.generate(t1, t2, site, seed=42)
-
-print(f"Generated {len(ex)} samples")
-print(f"Ex range: [{ex.min():.4f}, {ex.max():.4f}] V/m")
-print(f"Hx range: [{hx.min():.6f}, {hx.max():.6f}] A/m")
+rc = synth_main(['-model', 'examples/mta.XMLSITE', '-out', 'out_mta',
+                 '-dur', '3600', '-periods', '64', '-dense', '0'])
+rows = mtprocess.process('examples/mta.XMLSITE', 'out_mta')
+# rows: (freq, Z_est 2x2 complex, Z_theory 2x2, n_windows, max_relative_error)
 ```
 
-## Project Structure
+Full runnable script: [`examples/example_mtprocess.py`](examples/example_mtprocess.py).
+
+## Output files
+
+Per site in `-out`:
+
+| File | Content |
+|---|---|
+| `<site>.TBL` | Phoenix table file (FTIM/LTIM set to the actual span). |
+| `<site>.TS2` … `<site>.TS5` | Phoenix time series: 32-byte record headers + 24-bit little-endian, channel-interleaved samples. |
+| `<site>_dense.XMLSITE` | The densified model actually synthesized (present when `-dense > 0`); can be fed straight to `mtprocess`. |
+
+## Verification gates (`tools/mt_e2e_demo.py`)
+
+The demo synthesizes two sites (half-space ρ=100 Ω·m; ρ=30 Ω·m with perturbed impedance
+and 35° rotated geometry), then checks:
+
+1. **Anchor impedance** — single-frequency windowed DFT + calibration + least-squares Z
+   vs theory (sparse grid < 1e-2; densified grid < 1e-1, limited by neighbouring-segment
+   scattering, a resolution limit not an error).
+2. **Inter-site coherence** — H of site B = M·H of site A with a constant 2×2 M
+   (relative residual < 2e-2; measured < 2e-3).
+3. **Full dense-grid impedance** — median < 1e-2, ≥ 90 % of frequencies < 5e-2.
+4. **PSD continuity** — in-gap spectral amplitude ratio improved ≥ 46× by densification.
+
+The full demo passes on seed 42; the marginal dense-grid gate was additionally
+verified on seeds 7 and 123.
+
+## Performance (reference: MT mode, dense=4, periods=64, NVMe)
+
+| Job | Time | Output size |
+|---|---|---|
+| 1 day × 1 site | 4.4 s | ~25 MB |
+| 10 days × 1 site | 54 s | ~250 MB |
+| 10 days × 10 sites (coherently paired) | 127 s | ~3.3 GB |
+
+## Repository layout
 
 ```
 Synthetic-MT-Python/
-├── src/
-│   ├── synthetic_mt/          # Core synthesis library (modular structure)
-│   │   ├── domain/          # Domain entities & services
-│   │   ├── infrastructure/  # I/O handlers
-│   │   ├── application/     # Use cases
-│   │   └── presentation/    # GUI
-│   └── ...
-├── examples/
-│   ├── test_synthetic.py    # Basic examples
-│   └── mt_workflow/         # 1D MT workflow (模块化架构)
-│       ├── backend/         # 后台算法核心
-│       │   ├── core.py      # 算法实现 (Model, Forward, Processor)
-│       │   ├── api.py       # API接口
-│       │   └── verify_all.py # 模块验证
-│       ├── gui_simple.py    # 简化版GUI (单窗口, 调用backend.api)
-│       ├── gui_workflow.py  # 多标签页GUI (1D正演/合成/处理)
-│       ├── gui.py          # 旧版GUI
-│       └── ...
-├── docs/                    # Documentation
-└── README.md
+├── synthts/            # the package (CLI, synthesis, calibration, I/O, mtprocess)
+│   └── assets/         # built-in TBL/CLB/CLC instrument sets (MT + AMT)
+├── examples/           # ready-to-run XMLSITE models + Python API example
+├── tools/
+│   └── mt_e2e_demo.py  # four-gate end-to-end verification
+├── tests/              # pytest: smoke (MT/AMT/determinism) + slow four-gate e2e
+├── SKILL.md            # playbook for AI agents calling the CLI
+├── pyproject.toml
+└── LICENSE             # GPL-3.0
 ```
 
-## 1D MT Workflow (模块化架构)
-
-完整的1D大地电磁正演合成与处理工作流，采用**后台算法与界面分离**架构。
-
-### 架构
-
-```
-GUI (gui_workflow.py)  →  API层 (backend/api.py)  →  算法核心 (backend/core.py)
-     │                         │                           │
-   多标签页界面                接口                       MT1DModel
-   图表显示                  MTWorkflowAPI              MT1DForward
-   事件处理                  单例模式                   TimeSeriesSynthesizer
-                                                      TimeSeriesProcessor
-                                                      Model1DValidator
-```
-
-### 两种GUI
-
-| GUI | 文件 | 描述 |
-|-----|------|------|
-| **多标签页GUI** | `gui_workflow.py` | 推荐使用，三标签页界面（1D正演/合成/数据处理） |
-| 简化版GUI | `gui_simple.py` | 单窗口界面，适合简单工作流 |
-
-### 两种合成方法
-
-#### 1. 确定性合成 (`synthesize_time_series_deterministic`)
-- 保持精确E-H相位关系: `Ex = Zxy * Hy`
-- 用于算法验证
-- 处理结果与正演精确匹配 (<1%误差)
-
-#### 2. 随机合成 (`synthesize_time_series_random`)
-- 实现论文的 `RANDOM_SEG_PARTIAL` 算法
-- 每分段随机振幅 (`RandG(1,1)`) 和相位 (`Random * 2π`)
-- 模拟自然源变化
-- 处理结果有较大误差（预期行为）
-
-### 快速开始
-
-```python
-# 使用API进行完整工作流
-from examples.mt_workflow.backend.api import get_api
-
-api = get_api()
-
-# 1. 创建模型
-api.get_preset_model("uniform_100")
-
-# 2. 正演计算
-forward_result = api.run_forward()
-
-# 3. 合成时间序列
-ts_result = api.synthesize_time_series("TS3", duration=10)
-
-# 4. 处理时间序列
-processed = api.process_time_series()
-
-# 5. 对比结果
-comparator = api.compare_results()
-```
-
-### 后台验证
+## Tests
 
 ```bash
-cd examples/mt_workflow
-python backend/verify_all.py
+pytest                # smoke: MT + AMT CLI runs, JSON summary, same-seed determinism
+pytest -m slow        # four-gate end-to-end demo
 ```
-
-### 启动GUI
-
-```bash
-cd examples/mt_workflow
-python gui_simple.py
-```
-
-### 核心模块
-
-| 模块 | 功能 |
-|------|------|
-| `backend/core.py` | 算法核心: MT1DModel, MT1DForward, TimeSeriesSynthesizer, TimeSeriesProcessor |
-| `backend/api.py` | 统一API: MTWorkflowAPI单例, get_api()访问 |
-| `backend/verify_all.py` | 后台验证脚本 |
-| `gui_simple.py` | 简化版GUI (纯前端, 调用API) |
-
-## Core Features
-
-### 1. Time Series Synthesis
-
-Six synthesis methods are implemented to simulate natural source polarization variability:
-
-| Method | Description |
-|--------|-------------|
-| `FIX` | No segmentation - single continuous segment |
-| `FIXED_AVG` | Fixed-length averaging segments |
-| `FIXED_AVG_WINDOWED` | Fixed-length with Hanning window |
-| `RANDOM_SEG` | Random-length segments |
-| `RANDOM_SEG_WINDOWED` | Random-length with Hanning window |
-| `RANDOM_SEG_PARTIAL` | Random-length with partial window (default) |
-
-### 2. Acquisition System Configurations
-
-| Config | Sample Rate | Frequency Range |
-|--------|-------------|-----------------|
-| TS2 | 2400 Hz | 10 - 12000 Hz |
-| TS3 | 2400 Hz | 1 - 1000 Hz |
-| TS4 | 150 Hz | 0.1 - 10 Hz |
-| TS5 | 15 Hz | 1e-6 - 1 Hz |
-
-### 3. File Format Support
-
-- **ModEM Format**: Load forward modeling results
-- **Phoenix TSn/TBL**: Read/write Phoenix MTU time series data
-- **CLB/CLC**: Instrument calibration files
-- **Output**: GMT, CSV, NumPy formats
-
-### 4. Noise Injection
-
-```python
-from src import NoiseInjector, NoiseConfig, NoiseType
-
-# Gaussian noise
-config = NoiseConfig(noise_type=NoiseType.GAUSSIAN, amplitude=0.1)
-injector = NoiseInjector(config, sample_rate=2400)
-ex_noisy, ey_noisy, hx_noisy, hy_noisy, hz_noisy = injector.add_noise(ex, ey, hx, hy, hz)
-
-# Impulsive noise
-config = NoiseConfig(noise_type=NoiseType.IMPULSIVE, amplitude=1.0, probability=0.001)
-
-# Powerline interference (50/60Hz)
-config = NoiseConfig(noise_type=NoiseType.POWERLINE, amplitude=0.5, frequency=50.0)
-```
-
-## Usage
-
-### Command Line
-
-```bash
-# Generate time series
-python -m src.cli generate --begin-time "2023-01-01 00:00:00" --end-time "2023-01-01 00:01:00"
-
-# List synthesis methods
-python -m src.cli methods
-
-# List TS configurations
-python -m src.cli configs
-```
-
-### GUI
-
-```bash
-python -m src.gui
-```
-
-### Python Script
-
-```bash
-python examples/test_synthetic.py
-```
-
-## Algorithm
-
-The synthesis algorithm is based on:
-
-1. **Frequency-to-Time Conversion**: E(t) = A·cos(2πft + φ)
-2. **Source Simulation**: Two orthogonal polarized sources with random linear combination
-3. **Segment Stitching**: Windowed concatenation to simulate time-varying polarization
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Forward Modeling (ModEM)                                   │
-│  Zxx, Zxy, Zyx, Zyy, Tzx, Tzy                            │
-│  Ex1, Ey1, Hx1, Hy1, Hz1                                 │
-│  Ex2, Ey2, Hx2, Hy2, Hz2                                   │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Natural Magnetic Field Scaling                            │
-│  B_natural(f) = f^(-1/5) scaling                          │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Segment Synthesis (6 methods)                             │
-│  For each frequency:                                       │
-│    - Generate E1(t), E2(t) from two polarizations         │
-│    - Random amplitude/phase modulation                     │
-│    - Window and concatenate segments                       │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Output                                                    │
-│  Ex(t), Ey(t), Hx(t), Hy(t), Hz(t)                      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## API Reference
-
-### Core Classes
-
-- `SyntheticTimeSeries`: Main synthesis engine
-- `SyntheticSchema`: Configuration for TS acquisition systems
-- `ForwardSite`: Forward modeling site data
-- `EMFields`: Electromagnetic field data at one frequency
-
-### 1D MT Workflow API
-
-```python
-from examples.mt_workflow.backend.api import get_api
-
-api = get_api()
-api.get_preset_model("uniform_100")
-forward_result = api.run_forward()
-ts_result = api.synthesize_time_series_deterministic("TS3", duration=60)
-processed = api.process_time_series()
-comparator = api.compare_results()
-```
-
-### I/O Functions
-
-- `load_modem_file()`: Load ModEM forward results
-- `save_gmt_timeseries()`: Save in GMT-compatible format
-- `save_csv_timeseries()`: Save in CSV format
-- `save_numpy_timeseries()`: Save in NumPy format
-
-## Full Pipeline Test
-
-Run the complete 1D MT workflow test:
-
-```bash
-cd examples/mt_workflow
-python backend/test_full_pipeline.py
-```
-
-This tests:
-1. **Forward Modeling**: 1D model → impedance
-2. **Deterministic Synthesis**: Impedance → time series (preserves E-H phase)
-3. **FFT Processing**: Time series → estimated impedance
-4. **Comparison**: Forward vs Processed results
-
-**Test Results** (Deterministic Synthesis):
-| Model | Max rho_a Error | Mean rho_a Error | Max Phase Error | Status |
-|-------|---------------|-----------------|-----------------|--------|
-| uniform_100 | 0.93% | 0.30% | 0.39° | PASS |
-| uniform_1000 | 0.93% | 0.30% | 0.39° | PASS |
-| two_layer_hl | 1.14% | 0.35% | 0.48° | PASS |
-| two_layer_ll | 0.32% | 0.12% | 0.11° | PASS |
-| three_layer_hll | 0.60% | 0.24% | 0.21° | PASS |
-
-**Note**: Random synthesis (RANDOM_SEG_PARTIAL) produces larger errors (2-100%) due to intentional random amplitude/phase perturbations, which is the expected behavior per the paper.
-
-**Generated Artifacts** (in `docs/plots/`):
-- `<model>_comparison.png` - Per-model comparison
-- `all_models_summary.png` - Summary plot
-- `error_summary.png` - Error analysis
-- `test_report.md` - Test report
 
 ## Citation
-
-If you use this software in your research, please cite:
 
 ```bibtex
 @article{wang2023synthesizing,
@@ -346,77 +206,39 @@ If you use this software in your research, please cite:
 }
 ```
 
-## Related Projects
+## Related projects
 
-- [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries) - Original Delphi implementation
-- [Modified-ModEM](https://github.com/EMWPJ/Modified-ModEM-with-output-electromagnetic-field-values) - ModEM with EM field output
+- [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries) — original Delphi implementation
+- [Modified-ModEM](https://github.com/EMWPJ/Modified-ModEM-with-output-electromagnetic-field-values) — ModEM with EM field output (source of forward-model files)
 
 ## License
 
-[GPL-3.0 License](LICENSE)
+[GPL-3.0](LICENSE)
 
 ---
 
 ## 中文
 
-# SyntheticMT - 大地电磁合成时间序列 Python版
+# Synthetic-MT（synthts）— Phoenix 格式 MT/AMT 合成时间序列
 
-基于论文: Wang P, Chen X, Zhang Y (2023) [基于正演模拟合成大地电磁时间序列](https://www.frontiersin.org/articles/10.3389/feart.2023.1086749/full). *Frontiers in Earth Science* 11:1086749.
+把 **XMLSITE 正演模型**合成为带内置标定的 **Phoenix TS2–TS5 + TBL 二进制时间序列**，
+并附带极简 MT 处理器 `mtprocess` 验证合成数据与理论阻抗一致。v1.9 是本仓库的精简线：
+单算法（RandomSegmentPartiallyWindowed，Wang et al. 2023）、除模型外零外部依赖（仅 numpy）、
+同源批量多测点（远参考场景）、对数域频点加密（默认 4 点/倍频程）、`-seed` 全程可复现、
+结束时输出机器可读的 `SYNTHTS_SUMMARY` JSON 摘要行。
 
-## 安装
+**安装**（Python 3.10+）：`pip install -e .`
+
+**用法**：
 
 ```bash
-git clone https://github.com/EMWPJ/Synthetic-MT-Python.git
-cd Synthetic-MT-Python
-pip install numpy pyside6
+synthts -model examples/mta.XMLSITE -out out_mta                          # 单测点（MT 模式缺省 72h）
+synthts -model examples/mta.XMLSITE examples/mtb.XMLSITE -out out_pair -dur 3600   # 多测点同源批量
+python tools/mt_e2e_demo.py                                              # 四闸门验证（锚点Z/同源性/全网格Z/PSD连续性）
 ```
 
-## 快速开始
+时间起点固定 2050-01-01 00:00:00；`-dur` 缺省 AMT=3600s、MT=72h；退出码 0 成功 / 2 失败。
+完整参数表与 JSON 摘要字段见英文部分。v1.9 删除了旧版的六算法、PySide6 GUI、噪声注入、
+ModEM 导入与 GMT/CSV 输出（保留在 git 历史与旧版发布中）。
 
-```python
-from src import SyntheticTimeSeries, SyntheticSchema, SyntheticMethod, create_test_site
-from datetime import datetime
-
-site = create_test_site()
-schema = SyntheticSchema.from_ts('TS3')
-synth = SyntheticTimeSeries(schema, SyntheticMethod.RANDOM_SEG_PARTIAL)
-
-t1 = datetime(2023, 1, 1, 0, 0, 0)
-t2 = datetime(2023, 1, 1, 0, 1, 0)
-
-ex, ey, hx, hy, hz = synth.generate(t1, t2, site, seed=42)
-```
-
-## 运行方式
-
-- **命令行**: `python -m src.cli generate --begin-time "2023-01-01 00:00:00" --end-time "2023-01-01 00:01:00"`
-- **图形界面**: `python -m src.gui`
-- **Python脚本**: `python examples/test_synthetic.py`
-
-## 主要功能
-
-- 6种合成方法
-- ModEM正演结果解析
-- Phoenix TSn/TBL文件读写
-- 噪声注入（高斯、冲击、工频干扰）
-- GMT/CSV/NumPy输出格式
-- 自然磁场强度计算
-- PySide6图形界面
-
-## 1D MT工作流 (模块化)
-
-完整的1D大地电磁正演合成与处理工作流，采用后台与界面分离架构：
-
-- **后台**: `examples/mt_workflow/backend/` - 算法核心独立验证
-- **前端**: `examples/mt_workflow/gui_simple.py` - PySide6 GUI
-- **验证**: `python backend/verify_all.py` - 所有模块正确性验证
-
-### 预设模型
-
-| 模型名 | 描述 |
-|--------|------|
-| `uniform_100` | 均匀半空间 100 Ω·m |
-| `uniform_1000` | 均匀半空间 1000 Ω·m |
-| `two_layer_hl` | 两层高阻-低阻 (1000→10 Ω·m) |
-| `two_layer_ll` | 两层低阻-高阻 (10→1000 Ω·m) |
-| `three_layer_hll` | 三层高-低-低 (1000→10→100 Ω·m) |
+许可证：GPL-3.0。
