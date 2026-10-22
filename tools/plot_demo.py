@@ -32,9 +32,16 @@ OUT_DIR = 'plot_out'
 SITE = 'MTL'                      # layered demo site (H-type curve)
 RES = [100.0, 10.0, 1000.0]       # layer resistivities (Ohm m), last entry = half-space
 THICK = [300.0, 3000.0]           # layer thicknesses (m)
-ANCHORS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1, 0.032, 0.01]
+# 锚点下限 0.1Hz：更低频在 dur=3600s 下每极化仅 1~2 个分段（64 周期分段长
+# 6400s@0.01Hz），随机幅相无法跨段平均，会重现低频失衡
+ANCHORS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1]
 DENSE, DUR, PERIODS, SEED, SCALE = 2.0, 3600.0, 64, 42, 10.0
 H0 = 0.02                         # source magnetic field amplitude (A/m)
+# 极化方向旋转+椭圆化（同 e2e demo 构造）：保证每个通道都混含两个极化，
+# 否则轴对齐极化下 Ex/Ey 各绑一个极化，低频 1~2 个分段的随机幅相抽签
+# 可能把某个 E 通道的主频段整段压没（曾致 TS5 的 Ex 看似噪声）
+POLAR_THETA = 30.0                # 极化旋转角（度）
+POLAR_ELLIP = 0.5                 # 极化2短轴/长轴比（大一些保证两极化态均衡、LSQ 良态）
 
 
 def z1d(freq):
@@ -53,15 +60,17 @@ def cstr(z):
 
 
 def build_model(path):
-    """XMLSITE with two orthogonal source polarizations and E = Z(1D) · H."""
+    """XMLSITE with two rotated elliptical source polarizations and E = Z(1D) · H."""
+    th = math.radians(POLAR_THETA)
+    c, s = math.cos(th), math.sin(th)
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<Site name="%s" X="100.5" Y="30.2">' % SITE,
              '  <Synthetic>False</Synthetic>']
     for f in ANCHORS:
         z = z1d(f)
         zmat = np.array([[0.0, z], [-z, 0.0]])
-        h1 = np.array([complex(H0, 0.0), complex(0.0, 0.0)])
-        h2 = np.array([complex(0.0, 0.0), complex(H0, 0.0)])
+        h1 = np.array([complex(c, 0.0), complex(s, 0.0)]) * H0
+        h2 = np.array([complex(-s, 0.0), complex(POLAR_ELLIP * c, 0.0)]) * H0
         e1, e2 = zmat @ h1, zmat @ h2
         lines.append('  <Fields frequency="%r" isNoise="False">' % f)
         lines.append('    <Zxx>0,0</Zxx><Zxy>0,0</Zxy><Zyx>0,0</Zyx><Zyy>0,0</Zyy>'
