@@ -4,10 +4,10 @@
 Synthesizes one layered-model site, then draws two figures (fixed output
 directory ./plot_out under the current working directory):
 
-  1. time_series.png — five-channel stacked traces at the three sampling rates
+  1. fig_time_series.png — five-channel stacked traces at the three sampling rates
      2400/150/15 Hz (paper Fig 5A-C) plus the amplitude spectrum across the
      dense grid (paper Fig 5D);
-  2. rho_phase.png — apparent resistivity and phase estimated from the synthetic
+  2. fig_rho_phase.png — apparent resistivity and phase estimated from the synthetic
      time series (least squares) vs the 1D forward theory (paper Fig 6 style:
      blue circles line = theory, red dashed crosses = processed, Period axis).
 
@@ -187,12 +187,12 @@ def main():
     assert rc == 0, 'synthesis failed'
     dense_model = os.path.join(out_dir, '%s_dense.XMLSITE' % SITE)
 
-    plot_timeseries(out_dir, dense_model, os.path.join(out_dir, 'time_series.png'))
-    print('  figure: %s' % os.path.join(out_dir, 'time_series.png'))
+    plot_timeseries(out_dir, dense_model, os.path.join(out_dir, 'fig_time_series.png'))
+    print('  figure: %s' % os.path.join(out_dir, 'fig_time_series.png'))
 
     rows = mtprocess.process(dense_model, out_dir)
-    plot_rho_phase(rows, os.path.join(out_dir, 'rho_phase.png'))
-    print('  figure: %s' % os.path.join(out_dir, 'rho_phase.png'))
+    plot_rho_phase(rows, os.path.join(out_dir, 'fig_rho_phase.png'))
+    print('  figure: %s' % os.path.join(out_dir, 'fig_rho_phase.png'))
 
     # 纯 1D 模型理论 Z 对角元恒为 0，process() 的逐元素相对误差在対角上失真，
     # 汇总口径改用 Zxy（与图一致）

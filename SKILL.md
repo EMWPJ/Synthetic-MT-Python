@@ -83,7 +83,7 @@ seeds 7/123).
 
 ```bash
 pip install -e ".[plot]"     # once, adds matplotlib
-python tools/plot_demo.py    # writes ./plot_out/time_series.png + rho_phase.png
+python tools/plot_demo.py    # writes ./plot_out/fig_time_series.png + fig_rho_phase.png
 ```
 
 Layered 1D demo model; five-channel traces at 2400/150/15 Hz, amplitude spectrum,

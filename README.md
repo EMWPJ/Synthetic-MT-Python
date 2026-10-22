@@ -175,15 +175,15 @@ verified on seeds 7 and 123.
 
 ```bash
 pip install -e ".[plot]"
-python tools/plot_demo.py        # writes ./plot_out/
+python tools/plot_demo.py        # writes ./plot_out/fig_time_series.png + fig_rho_phase.png
 ```
 
 Draws two figures in the style of Wang et al. (2023) for a three-layer demo model
 (100/10/1000 Ω·m, H-type curve):
 
-- `time_series.png` — five-channel stacked traces at the 2400/150/15 Hz sampling
+- `fig_time_series.png` — five-channel stacked traces at the 2400/150/15 Hz sampling
   rates plus the amplitude spectrum across the dense grid (paper Fig 5);
-- `rho_phase.png` — apparent resistivity and phase estimated from the synthetic
+- `fig_rho_phase.png` — apparent resistivity and phase estimated from the synthetic
   series by least squares vs the 1D forward theory (paper Fig 6 style: blue
   circles line = theory, red dashed crosses = processed, Period axis).
 
