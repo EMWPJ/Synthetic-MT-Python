@@ -23,6 +23,7 @@ import numpy as np
 
 from . import calib
 from .model import load_site
+from .render_fft import interp_log_complex
 
 MU0 = 4e-7 * math.pi
 
@@ -211,3 +212,188 @@ def process(model_file, ts_dir, site_name=None, bypass_screen=False):
         err = np.abs(z_est - z_th) / np.maximum(np.abs(z_th), 1e-30)
         results.append((f.frequency, z_est, z_th, nwin, float(err.max())))
     return results
+
+
+# ── 频域逐 bin 处理（v2.1，无核偏置路径）────────────────────────────────
+#
+# 动机：8 周期单频 DFT 核（±0.32 oct）在连续谱上引入"Z 核加权平均"偏置
+# （地板 ~2e-2，见设计文档 §4 分解实验与 dense-CTS 实验）。渲染端保证
+# 逐 FFT bin E_c[k] = Σ_p T_{c,p}(f_k)·P̂_p[k]（线性代数精确，进程内实测
+# 7e-8），因此处理端也按窗×bin 堆叠样本、逐 bin 做 2×2 复 LSQ：零核偏置，
+# 方差 ∝ 1/N_win。理论参考用渲染同构口径（归一后锚点场各自 log 插值到
+# bin 频率再求 E·H⁻¹——"Z 值直接插值"与之不等价，见 §4）。
+
+
+def read_ts_binned(ts_path, nfft, hop=None):
+    """读 TS 文件按 nfft 分窗 rfft（hop 缺省=nfft 不重叠；nfft//2=50% 重叠）。
+
+    返回 (freqs[nb], Ch[4][nb, n_win])，Ch 顺序 Ex/Ey/Hx/Hy（未标定计数）。
+    """
+    if hop is None:
+        hop = nfft
+    raw = open(ts_path, 'rb').read()
+    chans = [[] for _ in range(5)]
+    sr = None
+    off = 0
+    while off + 32 <= len(raw):
+        head = raw[off:off + 32]
+        scans = int.from_bytes(head[10:12], 'little')
+        ch = head[12]
+        if not (0 < scans <= 100000 and 0 < ch <= 8):
+            break
+        nbytes = ch * scans * 3
+        if len(raw) < off + 32 + nbytes:
+            break
+        sr = int.from_bytes(head[18:20], 'little')
+        b = np.frombuffer(raw[off + 32:off + 32 + nbytes],
+                          dtype=np.uint8).reshape(-1, 3)
+        v = b[:, 0].astype(np.int32) | (b[:, 1].astype(np.int32) << 8) \
+            | (b[:, 2].astype(np.int32) << 16)
+        v = np.where(v >= (1 << 23), v - (1 << 24), v)
+        m = v.reshape(scans, ch).T.astype(np.float64)
+        for c in range(min(ch, 5)):
+            chans[c].append(m[c])
+        off += 32 + nbytes
+    data = [np.concatenate(chans[c]) for c in range(5)]
+    w = np.hanning(nfft)
+    nwin = max((len(data[0]) - nfft) // hop + 1, 0)
+    nb = nfft // 2 + 1
+    freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
+    chout = []
+    for c in range(4):
+        acc = np.empty((nb, nwin), dtype=complex)
+        for i in range(nwin):
+            acc[:, i] = np.fft.rfft(
+                data[c][i * hop:(i * hop + nfft)] * w)
+        chout.append(acc)
+    return freqs, chout, nwin
+
+
+def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
+                     site_name=None, f_min=0.0, f_max=np.inf,
+                     aggregate='lsq', hop=None):
+    """频域逐 bin 阻抗估计（零核偏置）。
+
+    aggregate='lsq'：跨窗堆叠样本做 2×2 复 LSQ（方差最优）。
+    返回 [(f_bin, Z_est, Z_theory_render, n_win, rel_err_max)]，
+    bin 频率限于 [f_min, f_max]。理论参考为渲染同构口径（见上）。
+    """
+    sname = site_name or 'MTA'
+    path = os.path.join(ts_dir, '%s.%s' % (sname, band))
+    freqs, ch, nwin = read_ts_binned(path, nfft, hop=hop)
+    model = load_site(model_file)
+    # 渲染同构的归一后锚点场（nature 归一为逐锚点列缩放：渲染端 T 在被
+    # 不同常数缩放的锚点场之间插值，其隐含 Z ≠ "Z 值直接插值"，必须
+    # 复刻同一缩放再插值求比）
+    from .cli import nature_magnetic_amplitude
+    rows_map = {x.frequency: x for x in model.fields if not x.is_noise}
+    af = sorted(rows_map)
+    scaled = {}
+    for name in ('ex1', 'ey1', 'hx1', 'hy1', 'ex2', 'ey2', 'hx2', 'hy2'):
+        v = []
+        for a in af:
+            row = rows_map[a]
+            nat = nature_magnetic_amplitude(a)
+            se = nat / math.sqrt(abs(row.hx1) ** 2 + abs(row.hy1) ** 2)
+            sb = nat / math.sqrt(abs(row.hx2) ** 2 + abs(row.hy2) ** 2)
+            k = 0 if name in ('ex1', 'ey1', 'hx1', 'hy1') else 1
+            v.append(getattr(row, name) * (se if k == 0 else sb))
+        scaled[name] = np.asarray(v)
+    lf = np.log10(np.asarray(af, dtype=float))
+    r = calib.responds_on_grid(freqs)
+    lgb = np.log10(np.maximum(freqs, 1e-300))
+
+    def field_at(name):
+        return (np.interp(lgb, lf, scaled[name].real)
+                + 1j * np.interp(lgb, lf, scaled[name].imag))
+
+    E1, E2 = field_at('ex1'), field_at('ex2')
+    H1, H2 = field_at('hx1'), field_at('hx2')
+    EY1, EY2 = field_at('ey1'), field_at('ey2')
+    HY1, HY2 = field_at('hy1'), field_at('hy2')
+    det = H1 * HY2 - H2 * HY1                            # Hx_1·Hy_2 − Hx_2·Hy_1
+    with np.errstate(divide='ignore', invalid='ignore'):
+        Zxx_ref = (E1 * HY2 - E2 * HY1) / det
+        Zxy_ref = (E2 * H1 - E1 * H2) / det
+        Zyx_ref = (EY1 * HY2 - EY2 * HY1) / det
+        Zyy_ref = (EY2 * H1 - EY1 * H2) / det
+
+    out = []
+    for k in range(1, len(freqs) - 1):
+        f = freqs[k]
+        if not (f_min <= f <= f_max):
+            continue
+        hx = ch[2][k] * r[2][k] / MU0
+        hy = ch[3][k] * r[3][k] / MU0
+        ex = ch[0][k] * r[0][k]
+        ey = ch[1][k] * r[1][k]
+        hmat = np.column_stack([hx, hy])
+        if np.linalg.matrix_rank(hmat) < 2:
+            continue
+        zxx, zxy = np.linalg.lstsq(hmat, ex, rcond=None)[0]
+        zyx, zyy = np.linalg.lstsq(hmat, ey, rcond=None)[0]
+        z = np.array([[zxx, zxy], [zyx, zyy]])
+        zt = np.array([[Zxx_ref[k], Zxy_ref[k]],
+                       [Zyx_ref[k], Zyy_ref[k]]])
+        err = float((np.abs(z - zt) / np.maximum(np.abs(zt), 1e-30)).max())
+        out.append((f, z, zt, nwin, err))
+    return out
+
+
+def kernel_corrected_theory(model_file, nfft, f_min, f_max, src_psd_grid,
+                            grid_freqs, fs_band):
+    """“理论过处理核”的预测：核平均 Z 的数值精确计算。
+
+    处理窗（nfft 样本 Hann）的频域功率核 |W|^2 在 bin 网格上取值（数值
+    DFT，非解析近似），核内 Z(f)^S_H 加权平均即为逐 bin LSQ 的期望输出
+    （处理估计 vs 本预测的残差应仅剩量化与统计起伏）。f0 取模型锚点。
+    """
+    model = load_site(model_file)
+    af = sorted(model.get_frequencies(False))
+    rows_map = {x.frequency: x for x in model.fields if not x.is_noise}
+    from .cli import nature_magnetic_amplitude
+    # 渲染同构的归一后锚点场 → 核内积分网格上的场比
+    grid = []
+    for f0 in af:
+        if not (f_min <= f0 <= f_max):
+            continue
+        tw = nfft / f0
+        lo = max(f0 - 8.0 * f0 / nfft * 2, f_min * 0.5)
+        hi = min(f0 + 8.0 * f0 / nfft * 2, f_max * 2)
+        if hi <= lo:
+            continue
+        grid.extend(np.logspace(math.log10(lo), math.log10(hi), 161))
+    grid = np.array(sorted(set(np.round(grid, 12))))
+    cols = {}
+    for name in ('ex1', 'ey1', 'hx1', 'hy1', 'ex2', 'ey2', 'hx2', 'hy2'):
+        cols[name] = interp_log_complex(
+            af, [getattr(rows_map[q], name) for q in af], grid)
+    det = (cols['hx1'] * cols['hy2'] - cols['hx2'] * cols['hy1']) + 0j
+    Zg = np.empty((len(grid), 2, 2), dtype=complex)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        Zg[:, 0, 0] = (cols['ex1'] * cols['hy2'] - cols['ex2'] * cols['hy1']) / det
+        Zg[:, 0, 1] = (cols['ex2'] * cols['hx1'] - cols['ex1'] * cols['hx2']) / det
+        Zg[:, 1, 0] = (cols['ey1'] * cols['hy2'] - cols['ey2'] * cols['hy1']) / det
+        Zg[:, 1, 1] = (cols['ey2'] * cols['hx1'] - cols['ey1'] * cols['hx2']) / det
+    lg = np.log10(np.maximum(grid, 1e-300))
+    lf_src = np.log10(np.maximum(np.asarray(grid_freqs, dtype=float), 1e-300))
+    sgrid = np.interp(lg, lf_src, np.asarray(src_psd_grid, dtype=float))
+    wspec = np.abs(np.fft.rfft(np.hanning(nfft)))
+    wspec = wspec / wspec[1]
+    nb = nfft // 2 + 1
+    df_bin = fs_band / nfft
+    out = []
+    for f0 in af:
+        if not (f_min <= f0 <= f_max):
+            continue
+        m = (grid >= f0 - nb * df_bin) & (grid <= f0 + nb * df_bin)
+        if m.sum() < 3:
+            continue
+        kk = np.abs(grid[m] - f0) / df_bin
+        ki = np.clip(np.round(kk).astype(int), 0, len(wspec) - 1)
+        w = wspec[ki] * (np.abs(Zg[m][:, 0, 1]) ** 2) * sgrid[m]
+        if w.sum() <= 0:
+            continue
+        zp = (Zg[m] * w[:, None, None]).sum(axis=0) / w.sum()
+        out.append((f0, zp, Zg[m][int(np.argmin(np.abs(grid[m] - f0)))]))
+    return out
