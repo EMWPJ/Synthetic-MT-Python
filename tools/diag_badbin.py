@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""坏 bin 取证：渲染谱的 rank-2 投影检验（bin 8/11/16 vs 好 bin）。"""
+"""坏 bin 取证（结论已固化）：渲染谱 rank-2 投影残差在带交点 bin 与好 bin
+同量级（泄漏级），证明 0.10-0.35Hz 段偏差=L2 带交点的核平均效应（两带
+突发权重波动×Z 梯度），非引擎缺陷；逐 bin LSQ+核校正为其最优处理。"""
 import contextlib
 import io
 import math

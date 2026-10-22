@@ -255,7 +255,9 @@ def read_ts_binned(ts_path, nfft, hop=None):
             chans[c].append(m[c])
         off += 32 + nbytes
     data = [np.concatenate(chans[c]) for c in range(5)]
-    w = np.hanning(nfft)
+    # 矩形分块（无窗）：DFT 是对角变换，逐 bin E=ZH 精确保持（M1 恒等式）；
+    # Hann 等锥形窗会把核内不同频率的 Z 能量按窗频响卷入（核平均偏置来源）
+    w = np.ones(nfft)
     nwin = max((len(data[0]) - nfft) // hop + 1, 0)
     nb = nfft // 2 + 1
     freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
