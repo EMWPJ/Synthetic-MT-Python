@@ -100,10 +100,10 @@ def render_record_source(rng, n, sample_rate, alpha1=1.0):
     return P
 
 
-def render_site(P, T):
-    """逐站：X_c = IFFT(Σ_p T[c,p]·P̂_p) → (5, n) float32。"""
-    nb = len(P[0])
-    n = 2 * (nb - 1) if nb % 2 == 1 else 2 * nb - 1   # rfft 输出长↔原始 n
+def render_site(P, T, n):
+    """逐站：X_c = IFFT(Σ_p T[c,p]·P̂_p) → (5, n) float32。n 显式传入
+    （rfft 输出长度无法唯一反推原始长度：n=2k 与 n=2k-1 同为 k+1 bins
+    的情形仅当…——直接传 n 消除歧义）。"""
     X = np.empty((5, n), dtype=np.float32)
     for c in range(5):
         spec = T[c, 0] * P[0] + T[c, 1] * P[1]

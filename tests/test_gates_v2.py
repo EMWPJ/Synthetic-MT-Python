@@ -76,10 +76,11 @@ def test_noise_summary_and_determinism(tmp_path):
     d1 = digest(out1)
     out2, _ = _run_noise(tmp_path, seed='42')
     assert digest(out2) == d1
-    # 默认引擎仍是 lines 且字段写全（null 占位）
+    # lines 引擎显式调用：字段写全（null 占位）
     r = subprocess.run(
         [sys.executable, '-m', 'synthts', '-model', MODEL,
-         '-out', str(tmp_path / 'l'), '-dur', '60', '-seed', '7'],
+         '-out', str(tmp_path / 'l'), '-dur', '60', '-seed', '7',
+         '-source', 'lines'],
         cwd=str(tmp_path), capture_output=True, text=True,
         encoding='utf-8', errors='replace')
     assert r.returncode == 0
@@ -87,6 +88,16 @@ def test_noise_summary_and_determinism(tmp_path):
                     if l.startswith('SYNTHTS_SUMMARY ')][-1][16:])
     assert s['source'] == 'lines' and s['preset'] is None \
         and s['n_bands'] is None and s['summary_v'] == 2
+    # v2.0 起默认源为 noise：零参数调用即 natural 预设
+    r = subprocess.run(
+        [sys.executable, '-m', 'synthts', '-model', MODEL,
+         '-out', str(tmp_path / 'd'), '-dur', '60', '-seed', '7'],
+        cwd=str(tmp_path), capture_output=True, text=True,
+        encoding='utf-8', errors='replace')
+    assert r.returncode == 0
+    s = json.loads([l for l in r.stdout.splitlines()
+                    if l.startswith('SYNTHTS_SUMMARY ')][-1][16:])
+    assert s['source'] == 'noise' and s['preset'] == 'natural'
 
 
 def test_gate5_continuity(tmp_path):

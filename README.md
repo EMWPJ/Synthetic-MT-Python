@@ -30,21 +30,29 @@ Method reference:
 
 ### Highlights
 
-- **Single algorithm** — `RandomSegmentPartiallyWindowed` (random-length segments with
-  partial Hanning overlap) simulates natural source polarization variability. Nothing else.
+- **Two source engines** (v2.0, `-source`, default `noise`):
+  - **noise** — a three-layer natural source: continuous white-noise floor
+    colored by the forward mapping (true continuous spectrum by construction),
+    half-octave band-burst log-normal gain envelopes (a band signal that lasts
+    a while — bursty, polarization-wandering, statistically realistic), and an
+    optional sparse Gabor event layer (`-preset full-event`).
+  - **lines** — the v1 line-spectrum engine (`RandomSegmentPartiallyWindowed`,
+    Wang et al. 2023), kept byte-identical as a deterministic, grid-matched
+    reference (also the fitting basis for source-parameter estimation work).
 - **Built-in calibration** — two embedded CTS tables for a reference instrument (Phoenix
   box 4360 + BMT coils), one set per mode. No external DLLs, no calibration files to find.
-- **Coherently-paired multi-site batches** — pass several models via `-model` and every
-  shared frequency gets identical segment lengths and random amplitude/phase factors
-  across all sites: one source field exciting many sites (remote-reference scenarios).
-- **Log-domain frequency densification** (`-dense`, default 4 points/octave) — anchor
-  frequencies are kept exact, the ten complex field components are interpolated linearly
-  in log10(f); in-gap spectral amplitudes improve 46–518× (the paper's continuity criterion).
+- **Coherently-paired multi-site batches** — pass several models via `-model` and the
+  source process is shared bin-exactly across all sites: one source field exciting
+  many sites (remote-reference scenarios).
+- **Presets & parameter injection** — `-preset natural` (default) / `pure-l1` /
+  `full-event`, or override any source parameter via `-source-params FILE.json`.
 - **Deterministic** — `-seed` (default 42) fixes every random draw; the same command
   produces byte-identical output.
 - **Machine-readable completion summary** — a final `SYNTHTS_SUMMARY {json}` line on
   stdout for scripts and AI agents.
-- **Self-verifying** — `tools/mt_e2e_demo.py` checks four quality gates end to end.
+- **Self-verifying** — `tools/mt_e2e_demo.py --source both` checks four quality
+  gates per engine; `tools/par_report.py` produces a lines-vs-noise comparison
+  report; `tools/cost_bench.py` benchmarks both engines.
 
 ### Removed in v1.9
 
@@ -190,13 +198,19 @@ Draws two figures in the style of Wang et al. (2023) for a three-layer demo mode
   log frequency axis (high frequency left): theoretical black lines, synthetic
   XY as red circles and YX as blue triangles — paper Fig 6 style.
 
-## Performance (reference: MT mode, dense=4, periods=64, NVMe)
+## Performance (reference: MT mode, NVMe)
 
-| Job | Time | Output size |
+| Job | lines (dense=4, periods=64) | noise (natural preset) |
 |---|---|---|
-| 1 day × 1 site | 4.4 s | ~25 MB |
-| 10 days × 1 site | 54 s | ~250 MB |
-| 10 days × 10 sites (coherently paired) | 127 s | ~3.3 GB |
+| 1 h × 2 sites | 0.17 s | 0.54 s |
+| 1 day × 1 site | 4.4 s | — |
+| 10 days × 1 site | 54 s | — |
+| 10 days × 10 sites (coherently paired) | 127 s | — |
+| 72 h × 1 site | — | ~121 s (TS5 band-synthesis FFTs dominate) |
+
+lines numbers are the v1 engine (sparse comb matched to the processing window);
+noise runs are cost-decoupled from the model frequency count (anchor-count
+sensitivity <10%, interleaved benchmark; see `tools/cost_bench.py`).
 
 ## Repository layout
 
@@ -253,9 +267,11 @@ pytest -m slow        # four-gate end-to-end demo + paper-style figures
 项目名继承自 Delphi 原版 [SyntheticMTTimeSeries](https://github.com/EMWPJ/SyntheticMTTimeSeries)。
 
 把 **XMLSITE 正演模型**合成为带内置标定的 **Phoenix TS2–TS5 + TBL 二进制时间序列**，
-并附带极简 MT 处理器 `mtprocess` 验证合成数据与理论阻抗一致。v1.9 是本仓库的精简线：
-单算法（RandomSegmentPartiallyWindowed，Wang et al. 2023）、除模型外零外部依赖（仅 numpy）、
-同源批量多测点（远参考场景）、对数域频点加密（默认 4 点/倍频程）、`-seed` 全程可复现、
+并附带极简 MT 处理器 `mtprocess` 验证合成数据与理论阻抗一致。**v2.0 起默认双引擎**
+（`-source`，默认 `noise`）：`noise`=三层天然源（连续谱底+分带突发包络+可选事件层，
+谱连续、阵发、统计真实），`lines`=v1 线谱（RandomSegmentPartiallyWindowed，Wang et al.
+2023，逐字节保留，确定性网格参照/源参数拟合基）；同源批量多测点（远参考场景）、
+预设 natural/pure-l1/full-event + `-source-params` 参数注入、`-seed` 全程可复现、
 结束时输出机器可读的 `SYNTHTS_SUMMARY` JSON 摘要行。
 
 **安装**（Python 3.10+）：`pip install -e .`
@@ -263,9 +279,10 @@ pytest -m slow        # four-gate end-to-end demo + paper-style figures
 **用法**：
 
 ```bash
-synthts -model examples/mta.XMLSITE -out out_mta                          # 单测点（MT 模式缺省 72h）
+synthts -model examples/mta.XMLSITE -out out_mta                          # 单测点（MT 模式缺省 72h，noise 引擎）
 synthts -model examples/mta.XMLSITE examples/mtb.XMLSITE -out out_pair -dur 3600   # 多测点同源批量
-python tools/mt_e2e_demo.py                                              # 四闸门验证（锚点Z/同源性/全网格Z/PSD连续性）
+synthts -model examples/mta.XMLSITE -out out_ref -source lines            # v1 线谱引擎
+python tools/mt_e2e_demo.py --source both                                # 双引擎四闸门验证
 ```
 
 机器可读摘要（stdout 末行，不写入 `-log`）：

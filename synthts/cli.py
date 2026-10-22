@@ -66,9 +66,9 @@ def parse_args(argv=None):
                    help='对数域频点自动加密：每倍频程 N 个点（锚点保留，场按 log 域插值；'
                         '默认 4，0 关闭）')
     p.add_argument('-log', default='', help='运行日志文件')
-    p.add_argument('-source', default='lines', choices=['lines', 'noise'],
-                   help='合成引擎：lines=v1 线谱（默认，逐字节不变）；'
-                        'noise=v2 噪声源（M1：L1 连续谱底）')
+    p.add_argument('-source', default='noise', choices=['lines', 'noise'],
+                   help='合成引擎：noise=v2 三层噪声源（默认，v2.0 起）；'
+                        'lines=v1 线谱（永久保留，逐字节不变）')
     p.add_argument('-preset', default='natural',
                    help='noise 源预设（natural 默认=分层带突发；pure-l1；'
                         'full-event=+事件层）')

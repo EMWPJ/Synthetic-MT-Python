@@ -250,7 +250,7 @@ class NoiseSource:
             P[1][0] = 0.0
             for k in range(len(site_list)):
                 outs[k][:, offs[j]:offs[j + 1]] = \
-                    render_fft.render_site(P, Ts[k])
+                    render_fft.render_site(P, Ts[k], n0)
         result = []
         for k, site in enumerate(site_list):
             channels = [[outs[k][c][offs[j]:offs[j + 1]]

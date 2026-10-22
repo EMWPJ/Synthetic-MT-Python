@@ -18,7 +18,8 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(REPO, 'examples', 'mta.XMLSITE')
 EXTS = ('.TBL', '.TS3', '.TS4', '.TS5')
-GOLDEN_ARGS = ['-model', MODEL, '-dur', '120', '-seed', '7', '-dense', '0']
+GOLDEN_ARGS = ['-model', MODEL, '-dur', '120', '-seed', '7', '-dense', '0',
+               '-source', 'lines']   # 默认源 v2.0 起为 noise；golden 固定 lines
 
 
 def _bucket_path():

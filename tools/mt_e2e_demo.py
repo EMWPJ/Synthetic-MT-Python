@@ -141,7 +141,7 @@ def run_engine(engine, name):
     model_b = out / 'mtb.XMLSITE'
     build_model(model_a, 'MTA', 100.0, 0.3, 0.0)
     build_model(model_b, 'MTB', 30.0, 0.45, 35.0)
-    eargs = ['-source', engine] if engine != 'lines' else []
+    eargs = ['-source', engine]          # v2.0 起默认源为 noise，两引擎都显式声明
     bypass = engine != 'lines'
 
     print('=== 1. 同源批量合成 + 对数域频点自动加密 (%g/倍频程) ===' % DENSE)

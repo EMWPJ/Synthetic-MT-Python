@@ -4,7 +4,7 @@ message: >-
   metadata from this file, and please also cite the method paper listed
   as the preferred-citation.
 title: Synthetic MT TimeSeries (SMTTS), Python edition (synthts)
-version: 1.9.0
+version: 2.0.0
 date-released: "2026-10-22"
 authors:
   - family-names: Wang
