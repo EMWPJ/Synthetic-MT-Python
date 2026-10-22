@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
-"""v2 三层源（M1: L1；M2: +L2 分带突发包络 + γ 公共因子 + L3 事件层）。
+"""v2 三层源（L1/L2/L3 + 可选谱形/昼夜调制/L4 加性噪声）。
 
-SourceProtocol 形态（设计 §3.5）：rng 分级派生（SeedSequence → 按名称排序
-的 schema 子序列 → 记录噪声流 + 包络/事件流），源抽签全部在 schema 层与
-测点无关——同源合同由结构保证。包络段链与事件定义在全局真实时间轴（跨记
-录间隙连续）；带内白噪按记录独立抽签（间隙 ≫ 带相关时间时统计等价于连续
-过程的离散采样，§3.3）。
+**跨档共享源结构**（v2.1，科学文档 §8 局限①修复）：L2 包络段链、γ 公共
+因子与 L3 事件提升为**全局 rng 流**（SeedSequence 顶层派生，按带/极化键
+控）——突发时刻与事件在所有采样档是同一物理实现；带限载波白噪仍按
+"schema×记录"独立抽签（同一连续过程的独立离散采样，间隙≫带相关时间时
+统计等价，§3.3）。rng 层级：
 
-rng 流说明：记录噪声（L1+L2 带白噪）与包络/事件分别从 schema 子序列的
-两个派生 Generator 顺序消费——同参数同流逐位复现；带数/事件数等参数变化
-会平移对应流的下游（记录内与包络内各自封闭，影响面见设计 §3.4 注）。
+    SeedSequence(seed)
+     ├─ env   → 段链（带×极化）/ γ / 事件（全局时间轴，全档共享）
+     ├─ l4    → 加性噪声（逐记录）
+     └─ schema（按名称排序）→ 记录白噪流（L1+L2 载波）
 
-功率归一化：L2 权重 α2 预除 E[g²]·E[γ²]（解析值 exp(2σ_ln²)，§2.1），
-使合同锚定均值 PSD；带集下截（带宽 <2.5 bin 的带跳过——该档低频端 L2
-份额略低，谱形由跨档覆盖，处理按 pick_ts_file 选窗最多档，§2.5）。
+功率归一化：三层均按每 Hz 单位谱密度口径（每样本方差 = fs）；L2 权重 α2
+预除 E[g²γ²]（解析 exp(2σ²)），锚定均值 PSD。带集下截（带宽 <2.5 bin 的
+带跳过，跨档由 pick_ts_file 覆盖）。
 """
 import math
 
@@ -25,6 +26,9 @@ from . import render_fft
 LN_OF_DB = 8.685889638065035      # 10/ln(10)：dB ↔ ln 换算
 MIN_BURST_PERIODS = 10.0          # 段长下限（§2.5 谱展宽守卫）
 CROSSFADE_PERIODS = 16.0          # 段间升余弦过渡宽（§2.1）
+DIURNAL_PERIOD_S = 86400.0        # 昼夜调制周期
+# Schumann 谐振（磁径向分量，频率/品质因数量级取自观测文献）
+SCHUMANN_PEAKS = ((7.83, 4.6), (14.3, 4.6), (20.8, 4.6), (26.4, 4.6))
 
 
 def _db_to_ln(sigma_db):
@@ -47,7 +51,7 @@ def make_chain(rng, f_b, dur_s, mean_periods, sigma_len_ln, sigma_gain_ln):
 
 
 def chain_arrays(segs):
-    """段链 → (edges, gains) 数组（采样热路径预转换，避免每次重建）。"""
+    """段链 → (edges, gains) 数组（采样热路径预转换）。"""
     return (np.array([s[0] for s in segs] + [segs[-1][1]]),
             np.array([s[2] for s in segs]))
 
@@ -55,8 +59,7 @@ def chain_arrays(segs):
 def sample_chain(edges, gains, t_axis, fade_s):
     """段链在真实时间轴 t_axis（秒，单调升）上的采样：分段常数 + 升余弦。
 
-    过渡按边界二分切片施加（切片总长 ≤ n + 边界区少量重叠）——整轴连续档
-    的段数×轴长乘积不可接受（曾致 72h TS5 27min）。
+    过渡按边界二分切片施加（切片总长 ≤ n + 边界区少量重叠）。
     """
     out = np.empty(len(t_axis), dtype=np.float64)
     t_lo, t_hi = float(t_axis[0]), float(t_axis[-1])
@@ -84,12 +87,7 @@ def sample_chain(edges, gains, t_axis, fade_s):
 
 
 def make_events(rng, dur_s, f_lo, f_hi, rate_per_hour, q, sigma_db):
-    """L3 事件表：Poisson 到达 + log-uniform 中心频 + LN 幅度 + 随机极化。
-
-    τ 与 Q 的关系按 §2.6 修正式 Q = 2√2π·f_c·τ_e（rms 时宽）。幅度标度
-    约定（M2）：事件为源过程的时域加性成分，幅度中位数由调用方以
-    sqrt(α3·fs) 折算（与单位 PSD 白噪同量纲、重尾向上）。
-    """
+    """L3 事件表（全局）：时间域 Poisson 到达 + log-uniform 中心频 + LN 幅度。"""
     n = int(rng.poisson(rate_per_hour * dur_s / 3600.0)) if rate_per_hour > 0 else 0
     events = []
     for _ in range(n):
@@ -103,11 +101,13 @@ def make_events(rng, dur_s, f_lo, f_hi, rate_per_hour, q, sigma_db):
     return events
 
 
-def _render_events(events, t_axis, a_ref):
-    """事件在时间轴上的两极化贡献（源单位）。"""
+def _render_events(events, t_axis, a_ref, f_max):
+    """事件在时间轴上的两极化贡献（源单位）；f_max 以上的事件不渲染（欠采样）。"""
     p1 = np.zeros(len(t_axis), dtype=np.float64)
     p2 = np.zeros(len(t_axis), dtype=np.float64)
     for t0, fc, tau, amp, phase, theta in events:
+        if fc > f_max:
+            continue
         dt = t_axis - t0
         m = np.abs(dt) <= 4.0 * tau
         if not m.any():
@@ -119,8 +119,62 @@ def _render_events(events, t_axis, a_ref):
     return p1, p2
 
 
+def schumann_shape(freqs):
+    """Schumann 谐振谱形（源侧乘子，返回幅度谱 √S）。"""
+    f = np.asarray(freqs, dtype=float)
+    s = np.ones_like(f)
+    for f_i, q_i in SCHUMANN_PEAKS:
+        hw = f_i / (2.0 * q_i)
+        s = s + 1.0 * hw ** 2 / ((f - f_i) ** 2 + hw ** 2)
+    return np.sqrt(s)
+
+
+def diurnal_gain(t_axis, level_db):
+    """昼夜调制 D(t) = 10^((dB/20)·½(1−cos(2πt/86400)))，峰值在 t=T/2。"""
+    return 10.0 ** ((level_db / 20.0)
+                    * 0.5 * (1.0 - np.cos(2.0 * math.pi * t_axis
+                                          / DIURNAL_PERIOD_S)))
+
+
+def add_l4_noise(X, rng, fs, t_axis, l4_type, level_db):
+    """L4 加性噪声（逐通道、与源独立；level 相对**该记录该通道 RMS**）。
+
+    white：高斯；powerline：50Hz 谐波族（至 Nyquist，每记录随机初相）；
+    impulsive：稀疏尖峰（泊松到达、重尾幅度）。
+    """
+    if l4_type == 'none' or level_db <= -120.0:
+        return X
+    amp = 10.0 ** (level_db / 20.0)
+    out = X.astype(np.float64)
+    for c in range(X.shape[0]):
+        sig = float(np.sqrt(np.mean(out[c] ** 2)))
+        if sig <= 0.0:
+            continue
+        sigma = sig * amp
+        if l4_type == 'white':
+            out[c] += rng.standard_normal(len(out[c])) * sigma
+        elif l4_type == 'powerline':
+            harm = []
+            k = 1
+            while 50.0 * k < 0.45 * fs:
+                harm.append(50.0 * k)
+                k += 1
+            if harm:
+                a = sigma / math.sqrt(0.5 * len(harm))
+                for fh in harm:
+                    out[c] += a * np.sin(2.0 * math.pi * fh * t_axis
+                                         + rng.uniform(0, 2 * math.pi))
+        elif l4_type == 'impulsive':
+            rate = max(len(out[c]) / 5000.0, 1e-6)
+            n = int(rng.poisson(rate))
+            for _ in range(n):
+                i = int(rng.integers(0, len(out[c])))
+                out[c][i] += sigma * 10.0 * rng.standard_normal()
+    return out.astype(np.float32)
+
+
 class NoiseSource:
-    """三层噪声源（L1 连续谱底 + L2 分带突发 + L3 事件，设计 §2.1）。"""
+    """三层噪声源 + 可选谱形/昼夜调制/L4 加性噪声（设计 §2.1）。"""
 
     def __init__(self, seed, params):
         self.seed = int(seed)
@@ -137,23 +191,55 @@ class NoiseSource:
         self.event_rate = float(params.get('event_rate', 0.0))
         self.event_q = float(params.get('event_q', 8.0))
         self.event_sigma_db = float(params.get('event_sigma_db', 10.0))
-        # 功率归一（解析 E[g²]·E[γ²] = exp(2σ_g,ln²)·exp(2σ_γ,ln²)，§2.1）
+        self.schumann = float(params.get('schumann', 0.0))
+        self.diurnal_db = float(params.get('diurnal_db', 0.0))
+        self.l4_type = str(params.get('l4_type', 'none'))
+        self.l4_level_db = float(params.get('l4_level_db', -60.0))
         self._eg2 = math.exp(2.0 * _db_to_ln(self.burst_sigma_db) ** 2) \
             * math.exp(2.0 * _db_to_ln(self.gamma_sigma_db) ** 2)
 
-    def schema_children(self, schema_names):
-        """SeedSequence → 按名称排序派生子序列（§3.4 分级 rng）。"""
+    # ── 全局源结构（跨档共享：段链/γ/事件，v2.1）────────────────────────
+    def prepare(self, model_f_lo, model_f_hi, dur_s, sr_max):
+        """一次抽签全局源结构；各档渲染共享（突发时刻/事件跨档一致）。"""
         ss = np.random.SeedSequence(self.seed)
+        g_env, g_l4 = ss.spawn(2)
+        rng_env = np.random.default_rng(g_env)
+        f_lo_g = max(model_f_lo, 2.0 / dur_s)
+        f_hi_g = min(model_f_hi, 0.4 * sr_max)
+        centers_g = bands_mod.band_centers(f_lo_g, f_hi_g, self.band_octave) \
+            if f_hi_g > f_lo_g else []
+        chains = {}
+        if self.alpha2 > 0 and centers_g:
+            for fc in centers_g:
+                for pi in range(2):
+                    chains[(fc, pi)] = chain_arrays(make_chain(
+                        rng_env, fc, dur_s, self.burst_periods,
+                        self.burst_len_sigma,
+                        _db_to_ln(self.burst_sigma_db)))
+        gamma_arr = None
+        if self.alpha2 > 0 and self.gamma_sigma_db > 0:
+            gamma_arr = chain_arrays(make_chain(
+                rng_env, 1.0 / max(3600.0, dur_s / 8.0), dur_s,
+                max(1.0, dur_s / (8.0 * 3600.0)), 0.0,
+                _db_to_ln(self.gamma_sigma_db)))
+        events, dropped = [], 0
+        if self.alpha3 > 0 and self.event_rate > 0:
+            events = make_events(rng_env, dur_s, f_lo_g, f_hi_g,
+                                 self.event_rate, self.event_q,
+                                 self.event_sigma_db)
+        return {'env_seq': g_env, 'l4_seq': g_l4, 'centers': centers_g,
+                'chains': chains, 'gamma': gamma_arr, 'events': events,
+                'events_dropped': dropped}
+
+    def schema_children(self, schema_names):
+        """schema 白噪流子序列（按名称排序；全局流独立于此，互不影响）。"""
+        ss = np.random.SeedSequence(self.seed + 1)
         names = sorted(schema_names)
         return dict(zip(names, ss.spawn(len(names))))
 
-    def render_schema(self, site_list, schema, plan, child_seq, model_f_lo,
-                      model_f_hi, dur_s):
-        """渲染一个 TS 档（源跨测点逐 bin 共享，synthetic_sites 同构输出）。
-
-        返回 (ts_list, info)；info 含 n_bands/events/events_dropped。
-        dur_s：合成总时长（秒）；全局时间轴 = 记录真实时间（TDateTime 差）。
-        """
+    def render_schema(self, site_list, schema, plan, schema_seq, state,
+                      dur_s, record_wins):
+        """渲染一个 TS 档。返回 (ts_list, info)。"""
         if not plan.records:
             empty = [{'name': schema['name'],
                       'sample_rate': schema['sample_rate'],
@@ -167,51 +253,18 @@ class NoiseSource:
         freqs = np.fft.rfftfreq(n0, d=1.0 / sr0)
         df = sr0 / n0
         t_begin = plan.records[0].begin
+        rng_noise = np.random.default_rng(schema_seq)
+        rng_l4 = np.random.default_rng(state['l4_seq'])
 
-        # 两条派生流：记录白噪（顺序）与包络/事件（顺序）
-        rng_noise = np.random.default_rng(child_seq)
-        rng_env = np.random.default_rng(
-            np.random.SeedSequence(child_seq.generate_state(8)))
+        centers = [c for c in state['centers'] if 0.35 * c >= 2.5 * df
+                   and c <= 0.4 * sr0]
+        seg_chains = state['chains']
+        gamma_arr = state['gamma']
 
-        # ── L2 带集 / 包络 / γ / 事件（全局时间轴，一次生成）────────────
-        total_s = n0 * len(plan.records) / sr0
-        f_lo_band = max(model_f_lo, 2.0 / total_s)
-        f_hi_band = min(model_f_hi, 0.4 * sr0)
-        centers = bands_mod.band_centers(f_lo_band, f_hi_band,
-                                         self.band_octave) \
-            if f_hi_band > f_lo_band else []
-        centers = [c for c in centers if 0.35 * c >= 2.5 * df]  # 可表示守卫
-        seg_chains, gamma_arr = {}, None
-        if self.alpha2 > 0 and centers:
-            for fc in centers:
-                for _pi in range(2):
-                    seg_chains[(fc, _pi)] = chain_arrays(make_chain(
-                        rng_env, fc, dur_s, self.burst_periods,
-                        self.burst_len_sigma,
-                        _db_to_ln(self.burst_sigma_db)))
-            if self.gamma_sigma_db > 0:
-                gamma_arr = chain_arrays(make_chain(
-                    rng_env, 1.0 / max(3600.0, dur_s / 8.0), dur_s,
-                    max(1.0, dur_s / (8.0 * 3600.0)), 0.0,
-                    _db_to_ln(self.gamma_sigma_db)))
-        events, n_dropped = [], 0
-        if self.alpha3 > 0 and self.event_rate > 0:
-            events = make_events(rng_env, dur_s, max(model_f_lo, 2.0 / dur_s),
-                                 min(model_f_hi, 0.4 * sr0), self.event_rate,
-                                 self.event_q, self.event_sigma_db)
-            # 占空比语义（§2.6）：与任一记录的真实时间窗相交才算被记录
-            wins = [((r.begin - t_begin) * 86400.0,
-                     (r.begin - t_begin) * 86400.0 + r.n_samples / sr0)
-                    for r in plan.records]
-            for ev in events:
-                if not any(ev[0] >= a - 4 * ev[2] and ev[0] <= b + 4 * ev[2]
-                           for a, b in wins):
-                    n_dropped += 1
+        # 昼夜调制门控：dur<24h 不启用（设计 §2.7 R1 修正）
+        diurnal_on = self.diurnal_db > 0 and dur_s >= DIURNAL_PERIOD_S
+        shape = schumann_shape(freqs) if self.schumann > 0 else None
 
-        # ── 每记录：L1 + L2 + L3 → 源谱 P̂（跨测点共享）→ 逐站渲染 ────
-        # 三层均为每 Hz 单位谱密度口径：白噪的每样本方差取 fs（L1 直取、
-        # L2 经带掩模继承、L3 事件以 √(α3·fs) 折算）——跨采样档重叠频段的
-        # 物理谱密度一致（R2c② 合同；曾漏乘 √fs 致 TS3 的 L2 份额 ~4%）
         Ts = [render_fft.transfer_matrix(s, freqs) for s in site_list]
         amp_l1 = math.sqrt(self.alpha1 * sr0)
         amp_l2 = math.sqrt(self.alpha2 * sr0 / self._eg2)
@@ -244,16 +297,33 @@ class NoiseSource:
                             p1 = p1 + (amp_l2 * g[0]) * nb
                         else:
                             p2 = p2 + (amp_l2 * g[1]) * nb
-            if events:
-                e1, e2 = _render_events(events, t_axis, a_ref_ev)
+            if state['events']:
+                e1, e2 = _render_events(state['events'], t_axis, a_ref_ev,
+                                        0.4 * sr0)
                 p1 = p1 + e1
                 p2 = p2 + e2
+            if diurnal_on:
+                dg = diurnal_gain(t_axis, self.diurnal_db)
+                p1 *= dg
+                p2 *= dg
             P = [np.fft.rfft(p1), np.fft.rfft(p2)]
+            if shape is not None:
+                P[0] *= shape
+                P[1] *= shape
             P[0][0] = 0.0
             P[1][0] = 0.0
             for k in range(len(site_list)):
-                outs[k][:, offs[j]:offs[j + 1]] = \
-                    render_fft.render_site(P, Ts[k], n0)
+                X = render_fft.render_site(P, Ts[k], n0)
+                if self.l4_type != 'none':
+                    X = add_l4_noise(X, rng_l4, sr0, t_axis,
+                                     self.l4_type, self.l4_level_db)
+                outs[k][:, offs[j]:offs[j + 1]] = X
+        # 占空比：全局事件未落入任何档任何记录窗（±4τ）才算 dropped
+        n_dropped = 0
+        for ev in state['events']:
+            if not any(ev[0] >= a - 4 * ev[2] and ev[0] <= b + 4 * ev[2]
+                       for a, b in record_wins):
+                n_dropped += 1
         result = []
         for k, site in enumerate(site_list):
             channels = [[outs[k][c][offs[j]:offs[j + 1]]
@@ -262,5 +332,6 @@ class NoiseSource:
                            'begins': [r.begin for r in plan.records],
                            'continuous': plan.continuous,
                            'channels': channels})
-        return result, {'n_bands': len(centers), 'events': len(events),
+        return result, {'n_bands': len(centers),
+                        'events': len(state['events']),
                         'events_dropped': n_dropped}

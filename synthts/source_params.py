@@ -34,7 +34,13 @@ PARAM_SCHEMA = {
     'event_rate': (float, 0.0, 1e6),          # L3 事件率（次/记录小时，M2）
     'event_q': (float, 3.0, 100.0),           # L3 Gabor Q
     'event_sigma_db': (float, 6.0, 15.0),     # L3 事件幅度 LN σ（dB，M2 追加）
+    'schumann': (float, 0.0, 1.0),            # Schumann 谐振谱形（0/1，v2.1）
+    'diurnal_db': (float, 0.0, 12.0),         # 昼夜调制 dB（0=关；dur≥24h 才生效）
+    'l4_level_db': (float, -60.0, 0.0),       # L4 加性噪声水平（相对通道 RMS）
 }
+
+# 枚举型参数（validate 特判）
+_ENUM_PARAMS = {'l4_type': ('none', 'white', 'powerline', 'impulsive')}
 
 # L4 加性噪声层参数 schema（§9.5 冻结；M4 实现，v2.0 仅占位校验）
 L4_SCHEMA = {
@@ -50,10 +56,13 @@ def validate(params):
     """参数校验（非法组合启动期断言，§6 风险表）。返回归一化 dict。"""
     if params is None:
         params = {}
-    unknown = set(params) - set(PARAM_SCHEMA)
+    unknown = set(params) - set(PARAM_SCHEMA) - set(_ENUM_PARAMS)
     if unknown:
         raise SystemExit('unknown source params: %s' % sorted(unknown))
     out = dict(params)
+    for key, choices in _ENUM_PARAMS.items():
+        if key in out and out[key] not in choices:
+            raise SystemExit('param %s must be one of %s' % (key, choices))
     for key, spec in PARAM_SCHEMA.items():
         if key not in out:
             continue

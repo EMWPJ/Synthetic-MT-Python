@@ -242,3 +242,120 @@ def test_calibration_selftest(tmp_path):
                encoding='utf-8', errors='replace', timeout=600)
     assert r.returncode == 0, r.stdout + r.stderr
     assert 'PASS' in r.stdout
+
+
+def _band_env(tsfile, f_b):
+    """带通±0.3oct + Hilbert 包络（calibrate_real 口径，直接读指定文件）。"""
+    import calibrate_real as cal
+    sr, data = mtprocess.read_ts(tsfile)
+    freqs = np.fft.rfftfreq(len(data[0]), 1.0 / sr)
+    with np.errstate(divide='ignore'):
+        lf = np.log2(np.maximum(freqs, 1e-300) / f_b)
+    mask = np.zeros_like(freqs)
+    mask[np.abs(lf) <= 0.3] = 1.0
+    tr = (np.abs(lf) > 0.3) & (np.abs(lf) < 0.45)
+    mask[tr] = 0.5 - 0.5 * np.cos(math.pi * (0.45 - np.abs(lf[tr])) / 0.15)
+    X = np.fft.rfft(data[2]) * mask
+    half = np.zeros(len(X) + 1, dtype=complex)
+    half[1:len(X)] = 2.0 * X[1:]
+    a = np.fft.ifft(half)[:len(data[0])]
+    n = int(round(8.0 * sr / f_b))
+    return np.abs(a)[::n], sr
+
+
+def test_cross_schema_shared_envelopes(tmp_path):
+    """v2.1 局限①：跨档共享包络——TS4 与 TS5 重叠带（1Hz）的包络应相关。"""
+    out = str(tmp_path / 'sh')
+    _run_noise_inproc(out, 7200, 99, preset='natural')
+    e4, _ = _band_env(os.path.join(out, 'MTA.TS4'), 1.0)
+    e5, _ = _band_env(os.path.join(out, 'MTA.TS5'), 1.0)
+    shutil.rmtree(out, ignore_errors=True)
+    n = min(len(e4), len(e5))
+    rho = float(np.corrcoef(e4[:n], e5[:n])[0, 1])
+    assert abs(rho) > 0.4, rho           # 载波独立、包络共享 → 中高相关
+
+
+def test_diurnal_modulation(tmp_path):
+    """v2.1 局限②：昼夜调制——24h 记录首/末 6h（峰）对中 6h（谷）功率比。"""
+    out = str(tmp_path / 'dn')
+    r = subprocess.run(
+        [sys.executable, '-m', 'synthts', '-model', MODEL, '-out', out,
+         '-dur', '86400', '-seed', '7', '-scale', '10', '-dense', '0',
+         '-source', 'noise',
+         '-source-params', os.path.join(REPO, 'tests', 'params_diurnal.json')],
+        cwd=str(tmp_path), capture_output=True, text=True,
+        encoding='utf-8', errors='replace')
+    assert r.returncode == 0, r.stdout + r.stderr
+    sr, d = mtprocess.read_ts(os.path.join(out, 'MTA.TS5'))
+    x = d[2].astype(np.float64)
+    seg = len(x) // 8
+    p_valley = float(np.mean(x[:seg] ** 2) + np.mean(x[-seg:] ** 2)) / 2
+    p_peak = float(np.mean(x[3 * seg:4 * seg] ** 2))
+    shutil.rmtree(out, ignore_errors=True)
+    ratio_db = 10 * math.log10(p_peak / p_valley)
+    assert 1.0 < ratio_db < 8.0, ratio_db   # diurnal 6dB，窗平均后部分平滑
+
+
+def test_schumann_shape(tmp_path):
+    """v2.1 局限③：Schumann 谱形——7.83Hz 处 PSD 相对 5Hz 被抬高。"""
+    def psd_ratio(out):
+        ratios = []
+        for f_pk, f_ref in ((7.83, 5.0), (14.3, 17.0)):
+            a = _band_psd(os.path.join(out, 'MTA.TS4'), f_pk)
+            b = _band_psd(os.path.join(out, 'MTA.TS4'), f_ref)
+            ratios.append(a / b)
+        return ratios
+    base = str(tmp_path / 'off')
+    _run_noise_inproc(base, 3600, 5, preset='natural')
+    off = psd_ratio(base)
+    shutil.rmtree(base, ignore_errors=True)
+    on_dir = str(tmp_path / 'on')
+    r = subprocess.run(
+        [sys.executable, '-m', 'synthts', '-model', MODEL, '-out', on_dir,
+         '-dur', '3600', '-seed', '5', '-scale', '10', '-dense', '0',
+         '-source', 'noise',
+         '-source-params', os.path.join(REPO, 'tests', 'params_schumann.json')],
+        cwd=str(tmp_path), capture_output=True, text=True,
+        encoding='utf-8', errors='replace')
+    assert r.returncode == 0, r.stdout + r.stderr
+    on = psd_ratio(on_dir)
+    shutil.rmtree(on_dir, ignore_errors=True)
+    assert on[0] / off[0] > 1.4           # 7.83Hz 峰抬高
+    assert 0.6 < on[1] / off[1] < 1.6     # 远离峰处基本不变（方差容差）
+
+
+def _band_psd(tsfile, f):
+    sr, d = mtprocess.read_ts(tsfile)
+    fs = float(sr)
+    n = int(round(8 * fs / f))
+    hop = n
+    w = np.hanning(n)
+    u = float((w * w).sum())
+    kern = w * np.exp(-2j * math.pi * f * np.arange(n) / fs)
+    x = d[2].astype(np.float64)
+    pw = [abs(np.dot(x[s:s + n], kern)) ** 2
+          for s in range(0, len(x) - n + 1, hop)]
+    return float(np.median(pw)) / (fs * u)
+
+
+def test_l4_additive_noise(tmp_path):
+    """v2.1 局限④：L4 白噪 -6dB → 通道 RMS 增 sqrt(1+10^-0.6)；E 通道独立。"""
+    base = str(tmp_path / 'clean')
+    _run_noise_inproc(base, 1800, 11, preset='natural')
+    sr, dc = mtprocess.read_ts(os.path.join(base, 'MTA.TS5'))
+    rms0 = float(np.sqrt(np.mean(dc[0].astype(np.float64) ** 2)))
+    shutil.rmtree(base, ignore_errors=True)
+    noisy = str(tmp_path / 'noisy')
+    r = subprocess.run(
+        [sys.executable, '-m', 'synthts', '-model', MODEL, '-out', noisy,
+         '-dur', '1800', '-seed', '11', '-scale', '10', '-dense', '0',
+         '-source', 'noise',
+         '-source-params', os.path.join(REPO, 'tests', 'params_l4.json')],
+        cwd=str(tmp_path), capture_output=True, text=True,
+        encoding='utf-8', errors='replace')
+    assert r.returncode == 0, r.stdout + r.stderr
+    sr, dn = mtprocess.read_ts(os.path.join(noisy, 'MTA.TS5'))
+    rms1 = float(np.sqrt(np.mean(dn[0].astype(np.float64) ** 2)))
+    shutil.rmtree(noisy, ignore_errors=True)
+    expect = math.sqrt(1.0 + 10.0 ** (-6.0 / 10.0))
+    assert 0.85 < rms1 / rms0 / expect < 1.15, (rms1 / rms0, expect)

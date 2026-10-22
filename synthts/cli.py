@@ -205,16 +205,29 @@ def main(argv=None):
             # 与 mtprocess 处理端 compute_responds 的最近邻口径一致
             noise = NoiseSource(args.seed, src_params)
             plans = render_fft.plan_from_schemas(schemas, btime, etime)
+            # 全局源结构一次抽签（段链/γ/事件跨档共享，v2.1）
+            sr_max = max(p.records[0].sample_rate for p in plans.values()
+                         if p.records)
+            state = noise.prepare(min(sig_all), max(sig_all), dur, sr_max)
             children = noise.schema_children([p.name for p in plans.values()])
+            rec0 = next((r for p in plans.values() for r in p.records), None)
+            t0_rec = rec0.begin if rec0 is not None else btime
+            record_wins = []
+            for plan in plans.values():
+                for r in plan.records:
+                    record_wins.append(((r.begin - t0_rec) * 86400.0,
+                                        (r.begin - t0_rec) * 86400.0
+                                        + r.n_samples / r.sample_rate))
             n_bands_info = {}
+            events_dropped = 0
             for schema in schemas:
                 t_seg = time.time()
                 plan = plans[schema['name']]
                 ts_list, info = noise.render_schema(
                     [site for _, site in sites], schema, plan,
-                    children[schema['name']], min(sig_all), max(sig_all), dur)
+                    children[schema['name']], state, dur, record_wins)
                 n_bands_info[schema['name']] = info['n_bands']
-                events_dropped += info['events_dropped']
+                events_dropped = info['events_dropped']
                 for k, ts in enumerate(ts_list):
                     path = write_time_series(ts, out_dir, tbl, site_names[k])
                     out_files.append(path)
