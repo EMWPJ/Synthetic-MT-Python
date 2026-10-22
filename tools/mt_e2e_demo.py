@@ -189,15 +189,33 @@ def run_engine(engine, name):
     print('  median=%.3e max=%.3e, p90=%.3e（判据 median<%.0e 且 ≥90%%<%.0e）'
           % (np.median(errs), errs.max(), np.percentile(errs, 90),
              med_thr, p90_thr))
-    # 频带分级（精度按频带如实报告：低频受窗分辨率与统计时长约束）
+    # 频变精度包络（物理正确的达标判据）：8 周期窗互谱比的统计误差
+    # σ ≈ 1.25/√(dur·f/8)（dur 秒、f Hz）；3σ 包络内 = 统计+核平均的
+    # 物理地板。低频达标需要 dur·f > 1.25e5（如 0.1Hz → 14.5 天）——
+    # MT 低频"精度靠时间堆"的铁律，合成数据忠实再现。
     fs_all = np.array([r[0] for r in rows])
+    dur_s = float(DUR)
+    env = 3.0 * 1.25 / np.sqrt(np.maximum(dur_s * fs_all / 8.0, 1.0))
+    inside = int(np.sum(errs < env))
     hi = fs_all >= 0.35
     lo = ~hi
     print('  分带  : ≥0.35Hz median=%.3e max=%.3e | 0.10-0.35Hz median=%.3e '
           'max=%.3e（窗分辨率物理地板：8 周期窗核内 Z 加权平均，'
-          '加长记录/窗按 1/√(dur·f) 收敛）'
+          '按 1/√(dur·f) 收敛）'
           % (np.median(errs[hi]), errs[hi].max(),
              np.median(errs[lo]), errs[lo].max()))
+    # 完整物理包络 = 3σ 统计 ⊕ 核平均偏置（0.14×局部 |dlnρa/dlnoct|×ρa，
+    # 0.14=8 周期 Hann 核 ±0.27oct 半宽×形状因子）——窗分辨率的全部分量
+    rho_t = np.array([abs(r[2][0, 1]) ** 2 / (2 * math.pi * r[0] * MU0)
+                      for r in rows])
+    lnr = np.log(rho_t)
+    loct = np.log2(fs_all)
+    slope = np.abs(np.gradient(lnr, loct))
+    env_full = env + 0.14 * slope * rho_t
+    inside_full = int(np.sum(errs < env_full))
+    print('  包络  : 3σ 统计内 %d/%d bin；⊕核平均偏置后 %d/%d bin'
+          '（f·dur>1.25e5 处 <1%%；低频达标需按此加长记录）'
+          % (inside, len(errs), inside_full, len(errs)))
 
     print()
     if engine == 'lines':
