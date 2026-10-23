@@ -58,3 +58,13 @@ worktrees/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# 合成/实验数据输出（可用 tools 脚本再生）
+run48h/
+syn06h*/
+syn24h/
+syn1h_coh/
+lt14d/
+demo_v22*/
+diag_tmp/
+*.log
