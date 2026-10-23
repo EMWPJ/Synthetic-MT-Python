@@ -36,6 +36,7 @@ TS_SPEC = {
 }
 
 WINDOW_PERIODS = 8.0   # 窗口长 = 8 倍信号周期（需求指定）
+MIN_WIN_PERIODS = 4.0  # 逐 bin 处理的最小窗长（周期数）：nfft 必须大于 4 倍对应周期
 
 
 def read_ts(path):
@@ -367,9 +368,13 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
         Zyy_ref = (EY2 * H1 - EY1 * H2) / det
 
     out = []
+    n_skip = 0
     for k in range(1, len(freqs) - 1):
         f = freqs[k]
         if not (f_min <= f <= f_max) or step_mask[k]:
+            continue
+        if f < MIN_WIN_PERIODS * (freqs[1] - freqs[0]):  # 窗长 < 4 周期的 bin 不处理
+            n_skip += 1
             continue
         hx = ch[2][k] * r[2][k] / MU0
         hy = ch[3][k] * r[3][k] / MU0
@@ -385,6 +390,9 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
                        [Zyx_ref[k], Zyy_ref[k]]])
         err = float((np.abs(z - zt) / np.maximum(np.abs(zt), 1e-30)).max())
         out.append((f, z, zt, nwin, err))
+    if n_skip:
+        print('  note: %d bins skipped (window < %g periods)'
+              % (n_skip, MIN_WIN_PERIODS))
     return out
 
 

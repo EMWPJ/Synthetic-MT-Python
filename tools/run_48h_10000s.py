@@ -90,12 +90,16 @@ def main():
     # 分段档(TS3/TS4)必须 hop=nfft：窗=整段（跨段时间缝的拼接窗经半窗
     # Dirichlet 泄漏混入邻 bin 的 Z，实测 −15%）。超低频用 rect+大 nfft：
     # Hann ±1bin 在 1e-4Hz 处混合 ±50% 的 Z（重尾），rect 整数 bin 零泄漏。
+    # 每档最短窗 >4 倍周期（f_min 处校验）：
+    #   TS3 2s/75Hz=150 | TS4 8s/3.75Hz=30 | TS5 546s/0.075Hz=41
+    #   TS5 4000s/0.0075Hz=30 | TS5 5000s/1e-3Hz=5 | TS5 50000s/1e-4Hz=5
     bands = [
         ('TS3', 4800, 75.0, 320.0, True, 4800, 'hann'),
         ('TS4', 1200, 3.75, 72.0, True, 1200, 'hann'),
         ('TS5', 8192, 0.075, 3.75, True, 4096, 'hann'),
         ('TS5', 60000, 0.0075, 0.075, True, 30000, 'hann'),
-        ('TS5', 300000, 8e-5, 0.0075, False, 150000, 'hann'),
+        ('TS5', 75000, 0.001, 0.0075, False, 37500, 'hann'),
+        ('TS5', 750000, 1e-4, 0.001, False, 375000, 'hann'),
     ]
     rows = []
     for band, nfft, flo, fhi, excl, hop, win in bands:
