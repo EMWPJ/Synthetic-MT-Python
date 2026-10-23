@@ -87,37 +87,33 @@ def _unwrap_group(rows):
 _SMOOTH_CACHE = {}
 
 
-def _smooth_grid(band):
-    """band 组的解卷绕网格（log10 f 升序的变换后复响应，5 通道）。"""
-    if band in _SMOOTH_CACHE:
-        return _SMOOTH_CACHE[band]
-    rows = sorted(_MT.get(band) or _AMT.get(band) or [], key=lambda x: x[0])
-    if not rows:
-        _SMOOTH_CACHE[band] = None
-        return None
-    gf = np.array([r[0] for r in rows])
-    ch = [[] for _ in range(5)]
-    for f, z5 in rows:
-        uw = _unwrap_group([transform_cts(z5[c]) for c in range(5)])
-        for c in range(5):
-            ch[c].append(uw[c])
-    out = (gf, [np.asarray(c) for c in ch])
-    _SMOOTH_CACHE[band] = out
-    return out
+def _dense_group(band):
+    """band 组的稠密响应（cts_dense，已变换、已对齐、log10 f 升序）。"""
+    if band not in _SMOOTH_CACHE:
+        try:
+            from .cts_dense import DENSE_CTS
+            rows = sorted((r for r in DENSE_CTS if r[1] == band), key=lambda x: x[0])
+        except Exception:
+            rows = []
+        if not rows:
+            _SMOOTH_CACHE[band] = None
+            return None
+        gf = np.array([r[0] for r in rows])
+        z5 = [np.array([complex(*r[2][2 * c:2 * c + 2]) for r in rows])
+              for c in range(5)]
+        _SMOOTH_CACHE[band] = (gf, z5)
+    return _SMOOTH_CACHE[band]
 
 
 def _respond_at_smooth(band, f):
-    g = _smooth_grid(band)
+    g = _dense_group(band)
     if g is None:
         return None
     gf, vals = g
     lg = math.log10(f)
     lgv = np.log10(gf)
-    out = []
-    for c in range(5):
-        out.append(complex(float(np.interp(lg, lgv, vals[c].real)),
-                           float(np.interp(lg, lgv, vals[c].imag))))
-    return out
+    return [complex(float(np.interp(lg, lgv, v.real)),
+                    float(np.interp(lg, lgv, v.imag))) for v in vals]
 
 
 def compute_responds(freqs):
@@ -183,7 +179,7 @@ def responds_on_grid(freqs):
             idx = np.nonzero(bands == band)[0]
             if not len(idx):
                 continue
-            g = _smooth_grid(band)
+            g = _dense_group(band)
             if g is None:
                 continue
             gf, vals = g
@@ -192,9 +188,6 @@ def responds_on_grid(freqs):
             for c in range(5):
                 out[c][idx] = (np.interp(lgb, lgv, vals[c].real)
                                + 1j * np.interp(lgb, lgv, vals[c].imag))
-        for c in range(5):
-            miss = np.nonzero(bands == 0)[0]
-            out[c][miss] = 1e-6 if c < 2 else 1e-9
         return out
     bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
     out = [np.empty(len(f), dtype=complex) for _ in range(5)]
