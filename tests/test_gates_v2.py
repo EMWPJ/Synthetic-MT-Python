@@ -153,7 +153,9 @@ def test_gate6_psd_shape(tmp_path):
         u = float((np.hanning(n) ** 2).sum())               # 归一化（PSD 口径）
         r = calib.compute_responds([f])
         phys = x * r[2][0] / (4e-7 * math.pi)               # ADC -> A/m
-        est = float(np.median(np.abs(phys) ** 2)) / (fs * u)
+        # PSD 口径用均值（Welch）：带交点探针处两独立 LN 增益链混合分布的
+        # 中位数天然偏离单带中位（实测 ~3 dB），均值才是无偏一致估计量
+        est = float(np.mean(np.abs(phys) ** 2)) / (fs * u)
         # 参考 = 锚点 nature 归一后场（渲染同构），再插值到 f
         hx1 = interp_log_complex(af, scaled['hx1'], [f])[0]
         hx2 = interp_log_complex(af, scaled['hx2'], [f])[0]

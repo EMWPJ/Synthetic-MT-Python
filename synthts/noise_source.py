@@ -27,6 +27,10 @@ LN_OF_DB = 8.685889638065035      # 10/ln(10)：dB ↔ ln 换算
 MIN_BURST_PERIODS = 10.0          # 段长下限（§2.5 谱展宽守卫）
 CROSSFADE_PERIODS = 16.0          # 段间升余弦过渡宽（§2.1）
 DIURNAL_PERIOD_S = 86400.0        # 昼夜调制周期
+# 计数固定增益（v2.2）：标准 demo 配置（-scale 10）渲染峰值 ~15.9k 计数，
+# ×256 ≈ 4.07M = 24bit 半量程——量化 SNR 提升 48dB 且不削顶
+COUNTS_SCALE = 256.0
+COUNTS_MAX = 0.9 * (1 << 23)      # 守卫阈：超限配置逐文件回落
 # Schumann 谐振（磁径向分量，频率/品质因数量级取自观测文献）
 SCHUMANN_PEAKS = ((7.83, 4.6), (14.3, 4.6), (20.8, 4.6), (26.4, 4.6))
 
@@ -312,6 +316,17 @@ class NoiseSource:
                     X = add_l4_noise(X, rng_l4, sr0, t_axis,
                                      self.l4_type, self.l4_level_db)
                 outs[k][:, offs[j]:offs[j + 1]] = X
+        # 24bit 动态范围（v2.2）：渲染计数幅度链使直接写盘只落在满量程的
+        # ~0.2%，量化噪声抬高 ~54dB（低 PSD 的带交点 bin 先行失真，表现为
+        # 孤立 bin 阻抗偏差）。施加确定性固定增益把标准配置推到近半量程
+        # ——增益与数据无关，跨档/跨 seed/跨 run 的幅度标度严格一致
+        # （逐文件峰值归一会破坏跨档 PSD 与包络统计的可比性，已否决）。
+        # 非预期大幅值配置由守卫逐文件回落（罕见路径）。
+        for k in range(len(site_list)):
+            outs[k] *= COUNTS_SCALE
+            peak = float(np.abs(outs[k]).max())
+            if peak > COUNTS_MAX:
+                outs[k] *= COUNTS_MAX / peak
         # 占空比：全局事件未落入任何档任何记录窗（±4τ）才算 dropped
         n_dropped = 0
         for ev in state['events']:

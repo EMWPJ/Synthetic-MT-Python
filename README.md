@@ -209,13 +209,15 @@ Draws two figures in the style of Wang et al. (2023) for a three-layer demo mode
 | 72 h × 1 site | — | ~121 s (TS5 band-synthesis FFTs dominate) |
 
 **Recovered accuracy** (v2 noise engine, 72 h record, frequency-binned
-processing, vs the theoretical impedance):
+processing with Hann block windows, vs the theoretical impedance; v2.2 —
+full 24-bit count scaling + calibration-step bins excluded, see
+`docs/theory/natural-source-synthesis-science.md` §4):
 
 | Band | ρa max rel. error | Note |
 |---|---|---|
-| 1 – 320 Hz (validation band) | **< 1 %** (median 1.0×10⁻⁴) | all 2842 dense-grid bins |
-| phase (validation band) | median 0.011° | far inside 1° |
-| 0.10 – 0.35 Hz | ~2×10⁻² floor | window-resolution + burst-statistics floor at 8 h records; converges as 1/√(dur·f) — < 1 % at 0.1 Hz needs ~14.5 days of continuous record (standard MT low-frequency time-accuracy law) |
+| 0.1 – 320 Hz (validation band) | **< 1 %** | all dense-grid bins; calibration-step neighbourhoods (±2 bins around CTS grid midpoints) excluded |
+| phase (validation band) | < 1° | — |
+| 6 h record, 0.075 – 0.35 Hz | max 6.3×10⁻³, phase max 0.62° | a few hours of data already meet < 1 % below 1 Hz |
 
 lines numbers are the v1 engine (sparse comb matched to the processing window);
 noise runs are cost-decoupled from the model frequency count (anchor-count

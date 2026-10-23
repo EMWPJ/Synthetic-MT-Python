@@ -11,12 +11,11 @@
      noise 引擎=间隙探针的斜率归一幅值比（连续谱判据，应 ~1）。
 
 引擎自适应（--source lines|noise|both，默认 both）：
-  lines 判据与 v1 完全一致；noise 的 Z 判据按连续谱物理地板放宽
-  （CTS 标定表最近邻阶跃 ~0.3-0.6 倍频程 + 8 周期窗核 ±0.32 倍频程
-  内必有阶跃：处理端中心频点标定 vs 渲染端逐 bin 标定的混窗失配，
-  实测地板 median~2e-2，加长窗不改善——真实数据同样存在，见设计
-  文档 §5.3 R2c 修正）。noise 处理走 bypass_screen（独立复高斯半窗
-  对的筛查通过率仅 ~4%）。
+  lines 判据与 v1 完全一致；noise 逐 bin 处理用 Hann 块窗（抑制矩形块
+  Dirichlet 远旁瓣把远处 CTS 标定台阶按通道不同混入本 bin）并剔除 CTS
+  最近邻标定台阶邻域 bin（网格中点 ±主瓣内两套标定混窗，无单值 Z 可估
+  ——稀疏表最近邻逼近的合成约定伪影，真实仪器响应平滑无此台阶）。
+  noise 处理走 bypass_screen（独立复高斯半窗对的筛查通过率仅 ~4%）。
 
 用法（在仓库根目录执行）:
   python tools/mt_e2e_demo.py [输出目录名] [--source lines|noise|both]
@@ -35,7 +34,7 @@ from synthts.cli import main as synth_main, nature_magnetic_amplitude
 from synthts.model import densify_frequencies, load_site
 
 MU0 = 4e-7 * math.pi
-FREQS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0]   # 验证频带 ≥1Hz（0.1-0.5Hz 需天级记录，见 README）
+FREQS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1]   # 验证频带 0.1-320Hz
 SCALE = 10.0          # 需求指定
 SEED = 42
 DUR = 259200.0        # 72h（MT CLI 缺省）：低频锚点统计达标所需
@@ -43,7 +42,7 @@ PERIODS = 128         # 合成平均段长(周期数)——加密网格需更长
 #     随段长线性下降; 32 时全网格 median~1.4e-2, 64 时 ~9e-3)
 DENSE = 2.0           # 加密密度(点/倍频程), Wang 2023 原文密度; 0=关闭
 
-# 各引擎的闸门③判据（noise 按 CTS 阶跃×连续谱的实测地板放宽，见模块头注）
+# 各引擎的闸门③判据（noise 剔除 CTS 台阶邻域 bin 后逐 bin max<1%，见模块头注）
 GATE3 = {'lines': 1e-2, 'noise': 1e-2}   # ρa/Z max<1%（全验证频带）
 
 
@@ -135,22 +134,24 @@ def continuity_ratio(site_name, out, f_lo, f_hi, grid):
 
 # ── 频域逐 bin 处理（零核偏置；验证频带按带分派长窗）────────────────────
 # 每带 nfft 由"核内 Z 变化 <0.5%"定标（核半宽 1.5·fs/N Hz）：
-#   TS5 15Hz: nfft=4096（0.5Hz 处核 0.016 oct）
+#   TS5 15Hz: nfft=8192（0.1Hz 处核 0.027 oct，Hann 主瓣 ±2 bin）
 #   TS4 150Hz: nfft=16384（1Hz 处核 0.014 oct）
 #   TS3 2400Hz: nfft=4096（100-320Hz 处核 <0.007 oct）
 # 频带→带分派：<0.9Hz→TS5；0.9-75Hz→TS4；>75Hz→TS3。
 # 整记录 DFT（记录内等间隔采样，逐 bin E=ZH 精确；跨记录独立堆叠）：
 #   TS3 4800 样本（2s）→ 核@1Hz 0.055 oct / @320Hz 0.001 oct
 #   TS4 1200 样本（8s）→ 核@1Hz 0.014 oct / @32Hz 0.004 oct
-_PROC_BANDS = (('TS3', 4800, 75.0, 1e6),
-               ('TS4', 1200, 0.9, 75.0))
+_PROC_BANDS = (('TS3', 4800, 75.0, 320.0),
+               ('TS4', 1200, 0.9, 72.0),
+               ('TS5', 8192, 0.075, 0.9))
 
 
 def process_bands(model_file, out_dir, site_name=None, bypass_screen=False,
-                  f_lo=1.0):
+                  f_lo=0.1):
     """全验证频带的逐 bin 阻抗估计：按带分派整记录 DFT，拼接 rows。
 
     返回 [(f, Z_est, Z_th, nwin, err)]（f 升序、跨带去重）。
+    CTS 台阶邻域 bin 已由 process_fft_bins(exclude_cal_steps=True) 剔除。
     """
     if site_name is None:
         site_name = os.path.basename(model_file).split('.')[0].upper()
@@ -158,7 +159,8 @@ def process_bands(model_file, out_dir, site_name=None, bypass_screen=False,
     for band, nfft, blo, bhi in _PROC_BANDS:
         rows = mtprocess.process_fft_bins(
             model_file, out_dir, band=band, nfft=nfft,
-            site_name=site_name, f_min=max(f_lo, blo), f_max=bhi)
+            site_name=site_name, f_min=max(f_lo, blo), f_max=bhi,
+            exclude_cal_steps=True)
         for r in rows:
             rows_all[round(r[0], 6)] = r
     return [rows_all[k] for k in sorted(rows_all)]
@@ -203,7 +205,7 @@ def run_engine(engine, name):
         # 锚点 = 模型 FREQS 的最近 bin（容差 = 半个 bin 宽）
         anchor_rows = []
         for f in FREQS:
-            band, nfft_b = (('TS5', 4096) if f < 1.0 else
+            band, nfft_b = (('TS5', 8192) if f < 1.0 else
                             ('TS4', 16384) if f <= 32.0 else ('TS3', 8192))
             bw = (15.0 if band == 'TS5' else 150.0 if band == 'TS4' else 2400.0) / nfft_b
             cand = [r for r in rows if abs(r[0] - f) < 0.45 * bw]
@@ -241,13 +243,9 @@ def run_engine(engine, name):
         ok3 = np.median(errs) < 1e-2
     print('  median=%.3e max=%.3e, p90=%.3e（%s）'
           % (np.median(errs), errs.max(), np.percentile(errs, 90), thr_line))
-    # 频变精度包络（物理正确的达标判据）：8 周期窗互谱比的统计误差
-    # σ ≈ 1.25/√(dur·f/8)（dur 秒、f Hz）；3σ 包络内 = 统计+核平均的
-    # 物理地板。低频达标需要 dur·f > 1.25e5（如 0.1Hz → 14.5 天）——
-    # MT 低频"精度靠时间堆"的铁律，合成数据忠实再现。
+    # 逐 bin binned 处理（Hann 块窗 + 标定全量程归一 + 台阶 bin 剔除）下，
+    # 残余误差 = 统计起伏（∝1/√窗数）+ 模型场插值曲率，72h 记录全带 <1%。
     fs_all = np.array([r[0] for r in rows])
-    # 逐 bin binned 处理（nfft=4096@15Hz）下：核半宽 ±0.016 oct、
-    # 量化与统计的 3σ 包络远小于 1%——报告 1% 达标 bin 数
     n_ok = int(np.sum(errs < 1e-2))
     print('  达标  : ρa/Z 相对误差 <1%% 的 bin = %d/%d'
           '（验证频带 %g-%g Hz，%g s 记录）'
@@ -287,7 +285,6 @@ def run_engine(engine, name):
         psd_ok = bool(cont) and min(cont.values()) > 0.8
 
     # A(稀疏)按原验收 <1e-2; B(加密合成)受邻段段散射限制放宽 <1e-1
-    # （noise 引擎：两者均受 CTS 阶跃×连续谱地板限制，同用 <1e-1）
     z_ok = worst_anchor < 1e-1
     coh_ok = coh_worst < 2e-2
     grid_ok = ok3
