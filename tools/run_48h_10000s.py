@@ -21,6 +21,9 @@ import numpy as np
 
 from synthts import calib, mtprocess
 from synthts.cli import main as synth_main
+
+# 平滑 CTS 响应：渲染与处理两侧同用（楼梯核内混合偏置归零）
+calib.SMOOTH_RESPONDS = True
 from synthts.model import densify_frequencies
 
 MU0 = 4e-7 * math.pi
@@ -92,14 +95,14 @@ def main():
     # Hann ±1bin 在 1e-4Hz 处混合 ±50% 的 Z（重尾），rect 整数 bin 零泄漏。
     # 每档最短窗 >4 倍周期（f_min 处校验）：
     #   TS3 2s/75Hz=150 | TS4 8s/3.75Hz=30 | TS5 546s/0.075Hz=41
-    #   TS5 4000s/0.0075Hz=30 | TS5 5000s/1e-3Hz=5 | TS5 50000s/1e-4Hz=5
+    #   TS5 4000s/0.0075Hz=30 | TS5 10000s/1e-3Hz=10 | TS5 100000s/1e-4Hz=10
     bands = [
         ('TS3', 4800, 75.0, 320.0, True, 4800, 'hann'),
         ('TS4', 1200, 3.75, 72.0, True, 1200, 'hann'),
         ('TS5', 8192, 0.075, 3.75, True, 4096, 'hann'),
         ('TS5', 60000, 0.0075, 0.075, True, 30000, 'hann'),
-        ('TS5', 75000, 0.001, 0.0075, False, 37500, 'hann'),
-        ('TS5', 750000, 1e-4, 0.001, False, 375000, 'hann'),
+        ('TS5', 150000, 0.001, 0.0075, False, 37500, 'hann'),
+        ('TS5', 1500000, 1e-4, 0.001, False, 375000, 'hann'),
     ]
     rows = []
     for band, nfft, flo, fhi, excl, hop, win in bands:

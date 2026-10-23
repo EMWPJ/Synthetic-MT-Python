@@ -13,12 +13,21 @@
 输出合同（与主工程一致）：responds[ch] = adcFactor * conj(z) / |z|^2，
 adcFactor = 1/2^23。
 """
+import math
 import os
+
+import numpy as np
 
 from .cts_amt import CTS_AMT
 from .cts_mt import CTS_MT
 
 ADC_FACTOR = 1.0 / 8388608.0
+
+# 响应取值模式：'nearest'（默认，与主工程 InterpolateCTSResponses 一致）
+# 或 'smooth'（符号解卷绕 + log-f 域复数线性插值——稠密 CTS 实验证明底层
+# 响应平滑、表内"符号交替"仅为 z→−z 约定翻转；渲染与处理两侧须同用
+# 同一模式， staircase 的核内混合偏置即消失）。
+SMOOTH_RESPONDS = False
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
 
@@ -65,26 +74,78 @@ def _nearest(group, f):
     return best
 
 
+def _unwrap_group(rows):
+    """组内相位解卷绕：逐行翻转让相邻行相关为正（z→−z 约定翻转还原）。"""
+    out = [rows[0]]
+    for z in rows[1:]:
+        prev = out[-1]
+        zc = z if (z.real * prev.real + z.imag * prev.imag) >= 0 else -z
+        out.append(zc)
+    return out
+
+
+_SMOOTH_CACHE = {}
+
+
+def _smooth_grid(band):
+    """band 组的解卷绕网格（log10 f 升序的变换后复响应，5 通道）。"""
+    if band in _SMOOTH_CACHE:
+        return _SMOOTH_CACHE[band]
+    rows = sorted(_MT.get(band) or _AMT.get(band) or [], key=lambda x: x[0])
+    if not rows:
+        _SMOOTH_CACHE[band] = None
+        return None
+    gf = np.array([r[0] for r in rows])
+    ch = [[] for _ in range(5)]
+    for f, z5 in rows:
+        uw = _unwrap_group([transform_cts(z5[c]) for c in range(5)])
+        for c in range(5):
+            ch[c].append(uw[c])
+    out = (gf, [np.asarray(c) for c in ch])
+    _SMOOTH_CACHE[band] = out
+    return out
+
+
+def _respond_at_smooth(band, f):
+    g = _smooth_grid(band)
+    if g is None:
+        return None
+    gf, vals = g
+    lg = math.log10(f)
+    lgv = np.log10(gf)
+    out = []
+    for c in range(5):
+        out.append(complex(float(np.interp(lg, lgv, vals[c].real)),
+                           float(np.interp(lg, lgv, vals[c].imag))))
+    return out
+
+
 def compute_responds(freqs):
     """按频率求系统响应（band 组内最近邻 + adcFactor 变换）。
 
+    SMOOTH_RESPONDS=True 时改用解卷绕平滑插值（渲染/处理两侧须同用）。
     返回 responds[5][N]；无法覆盖的频率（band 组缺失）按单位 1E-6/1E-9 常数
     （主工程 NoCal 语义兜底）。
     """
     out = [[] for _ in range(5)]
     for f in freqs:
         band = band_of_freq(f)
-        z5 = None
-        if band in _MT:
-            z5 = _nearest(_MT[band], f)
-        elif band in _AMT:
-            z5 = _nearest(_AMT[band], f)
+        if SMOOTH_RESPONDS:
+            z5 = _respond_at_smooth(band, f)   # 已变换
+        else:
+            z5 = None
+            if band in _MT:
+                z5 = _nearest(_MT[band], f)
+            elif band in _AMT:
+                z5 = _nearest(_AMT[band], f)
         if z5 is None:
             for c in range(5):
                 out[c].append(complex(1e-6, 0) if c < 2 else complex(1e-9, 0))
             continue
+        if not SMOOTH_RESPONDS:
+            z5 = [transform_cts(v) for v in z5]
         for c in range(5):
-            out[c].append(transform_cts(z5[c]))
+            out[c].append(z5[c])
     return out
 
 
@@ -109,11 +170,32 @@ def _grid_for(band):
 def responds_on_grid(freqs):
     """compute_responds 的向量化入口（逐点语义恒等，供 v2 逐 bin 装配）。
 
+    SMOOTH_RESPONDS=True 时改用解卷绕平滑插值。
     返回 [5] 个 numpy complex 数组，长度同 freqs。最近邻平局时保留较左侧
     网格点（与 _nearest 的"严格更优才替换"语义一致）。
     """
     import numpy as np
     f = np.asarray(freqs, dtype=float)
+    if SMOOTH_RESPONDS:
+        bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+        out = [np.empty(len(f), dtype=complex) for _ in range(5)]
+        for band in (2, 3, 4, 5):
+            idx = np.nonzero(bands == band)[0]
+            if not len(idx):
+                continue
+            g = _smooth_grid(band)
+            if g is None:
+                continue
+            gf, vals = g
+            lgb = np.log10(np.maximum(f[idx], 1e-300))
+            lgv = np.log10(gf)
+            for c in range(5):
+                out[c][idx] = (np.interp(lgb, lgv, vals[c].real)
+                               + 1j * np.interp(lgb, lgv, vals[c].imag))
+        for c in range(5):
+            miss = np.nonzero(bands == 0)[0]
+            out[c][miss] = 1e-6 if c < 2 else 1e-9
+        return out
     bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
     out = [np.empty(len(f), dtype=complex) for _ in range(5)]
     for band in (2, 3, 4, 5):
