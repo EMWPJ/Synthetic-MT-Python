@@ -163,6 +163,13 @@ Per site in `-out`:
 | `<site>.TS2` … `<site>.TS5` | Phoenix time series: 32-byte record headers + 24-bit little-endian, channel-interleaved samples. |
 | `<site>_dense.XMLSITE` | The densified model actually synthesized (present when `-dense > 0`); can be fed straight to `mtprocess`. |
 
+**Electric-channel sign convention.** The forward model fields follow the
+*e*^{−*iωt}* impedance convention (E = Z·H). Time-series consumers that estimate
+impedance under the *e*^{+*iωt}* harmonic factor must negate the electric
+channels; the writer therefore flips Ex/Ey on disk, and `mtprocess` negates
+them again after calibration, so the round trip is sign-neutral while files
+carry the processing-side convention.
+
 ## Verification gates (`tools/mt_e2e_demo.py`)
 
 The demo synthesizes two sites (half-space ρ=100 Ω·m; ρ=30 Ω·m with perturbed impedance

@@ -158,9 +158,10 @@ def estimate_impedance_at(freq, ts_dir, site_name, bypass_screen=False):
     xhy = window_dft(data[3], fs, freq)
 
     # 标定：合成链 E_adc = E/rE、H_adc = H/rH·μ0 的精确逆
+    # 电道取负：文件电道按 e^{-iωt} 口径写盘（见 phoenix_ts._pack_body），此处对称翻回
     r = calib.compute_responds([freq])
-    fe = xe * r[0][0]
-    fy = xy * r[1][0]
+    fe = -xe * r[0][0]
+    fy = -xy * r[1][0]
     fhx = xhx * r[2][0] / MU0
     fhy = xhy * r[3][0] / MU0
 
@@ -378,8 +379,8 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
             continue
         hx = ch[2][k] * r[2][k] / MU0
         hy = ch[3][k] * r[3][k] / MU0
-        ex = ch[0][k] * r[0][k]
-        ey = ch[1][k] * r[1][k]
+        ex = -ch[0][k] * r[0][k]
+        ey = -ch[1][k] * r[1][k]
         hmat = np.column_stack([hx, hy])
         if hmat.shape[0] < 2 or np.linalg.matrix_rank(hmat) < 2:
             continue

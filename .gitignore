@@ -68,3 +68,5 @@ lt14d/
 demo_v22*/
 diag_tmp/
 *.log
+mt_e2e_out_lines/
+mt_e2e_out_noise/

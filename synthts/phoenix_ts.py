@@ -72,7 +72,13 @@ def _headers_block(base_tdatetime, nrec, scans, ts_sr, boxsn, samplerate):
 
 
 def _pack_body(X5, continuous):
-    """(5, n) float -> n*15 字节样本体（scan 主序/通道交错，24bit LE）。"""
+    """(5, n) float -> n*15 字节样本体（scan 主序/通道交错，24bit LE）。
+
+    电道 (Ex, Ey) 写盘取负：正演场 E=ZH 为 e^{-iωt} 阻抗口径，处理链按
+    e^{+iωt} 估计阻抗，两侧电道对称取负后相位才与 MT 惯例一致。
+    """
+    X5 = X5.copy()
+    X5[0:2] = -X5[0:2]
     v = np.trunc(X5) if continuous else np.rint(X5)
     v = v.astype(np.int64)
     np.bitwise_and(v, 0xFFFFFF, out=v)

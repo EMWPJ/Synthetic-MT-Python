@@ -162,8 +162,8 @@ def run_case(tag, cfg):
                     V = win_dfts(data, np.asarray(starts), n, N, f, sr)
                     hx = V[2] * r[2][0] / MU0                        # (B,N)
                     hy = V[3] * r[3][0] / MU0
-                    ex = V[0] * r[0][0]
-                    ey = V[1] * r[1][0]
+                    ex = -V[0] * r[0][0]
+                    ey = -V[1] * r[1][0]
                     errs, rho_err, ph_err, rhoa = [], [], [], []
                     for b in range(len(starts)):
                         h = np.column_stack([hx[b], hy[b]])
