@@ -137,13 +137,15 @@ def continuity_ratio(site_name, out, f_lo, f_hi, grid):
 #   TS5 15Hz: nfft=8192（0.1Hz 处核 0.027 oct，Hann 主瓣 ±2 bin）
 #   TS4 150Hz: nfft=16384（1Hz 处核 0.014 oct）
 #   TS3 2400Hz: nfft=4096（100-320Hz 处核 <0.007 oct）
-# 频带→带分派：<0.9Hz→TS5；0.9-75Hz→TS4；>75Hz→TS3。
+# 频带→带分派：<3.75Hz→TS5（连续档，bin 相对分辨率好）；
+#   3.75-72Hz→TS4；>75Hz→TS3。（TS4 窗口档 bin 宽 0.125Hz 的绝对
+#   台阶剔除区在 1-3Hz 处相当于 ±0.35oct，会吞掉整个十倍程）
 # 整记录 DFT（记录内等间隔采样，逐 bin E=ZH 精确；跨记录独立堆叠）：
 #   TS3 4800 样本（2s）→ 核@1Hz 0.055 oct / @320Hz 0.001 oct
 #   TS4 1200 样本（8s）→ 核@1Hz 0.014 oct / @32Hz 0.004 oct
 _PROC_BANDS = (('TS3', 4800, 75.0, 320.0),
-               ('TS4', 1200, 0.9, 72.0),
-               ('TS5', 8192, 0.075, 0.9))
+               ('TS4', 1200, 3.75, 72.0),
+               ('TS5', 8192, 0.075, 3.75))
 
 
 def process_bands(model_file, out_dir, site_name=None, bypass_screen=False,
