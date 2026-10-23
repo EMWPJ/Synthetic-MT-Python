@@ -138,6 +138,13 @@ def plot_timeseries(out_dir, dense_model, png):
         ('TS4', 2400, 1.0, '(b) Time Series (150 Hz)', 'Time (s)'),
         ('TS5', 54015, 3600.0, '(c) Time Series (15 Hz)', 'Time (h)'),
     ]
+    # 各档代表频点的标定换算（时间序列显示物理单位：E=mV/km，H=nT）
+    BAND_F_REP = {'TS3': 300.0, 'TS4': 8.0, 'TS5': 0.4}
+    band_scale = {}
+    for lab, band, _, _, _ in FAMILIES:
+        r = calib.compute_responds([BAND_F_REP[band]])
+        band_scale[band] = [r[c][0] * (1e3 if c < 2 else 1e9)
+                            for c in range(4)]
     for c, ch in enumerate(CHANNELS):
         for k, (band, n_show, t_scale, title, xlab) in enumerate(cols):
             ax = fig.add_subplot(gs[c, k])
@@ -145,9 +152,9 @@ def plot_timeseries(out_dir, dense_model, png):
             fs = float(sr)
             n = min(n_show, len(data[c]))
             t = np.arange(n) / fs / t_scale
-            ax.plot(t, data[c][:n], lw=0.5, color='k')
+            ax.plot(t, data[c][:n] * band_scale[band][c], lw=0.5, color='k')
             if k == 0:
-                ax.set_ylabel('%s (count)' % ch)
+                ax.set_ylabel('%s (%s)' % (ch, 'mV/km' if c < 2 else 'nT'))
             else:
                 ax.set_yticklabels([])
             if c == 3:
@@ -303,7 +310,9 @@ def main():
     plot_spectrogram(out_dir, os.path.join(out_dir, 'fig_spectrogram.png'))
     print('  figure: %s' % os.path.join(out_dir, 'fig_spectrogram.png'))
 
-    rows = mtprocess.process(dense_model, out_dir)
+    # 逐 bin 处理（与 e2e demo 闸门同口径：Hann 块窗 + CTS 台阶 bin 剔除）
+    import mt_e2e_demo as demo
+    rows = demo.process_bands(dense_model, out_dir, site_name=SITE)
     plot_rho_phase(rows, os.path.join(out_dir, 'fig_rho_phase.png'))
     print('  figure: %s' % os.path.join(out_dir, 'fig_rho_phase.png'))
 
