@@ -21,14 +21,16 @@ import numpy as np
 
 from synthts import calib, mtprocess
 from synthts.cli import main as synth_main
+from synthts.model import densify_frequencies
 
 MU0 = 4e-7 * math.pi
 OUT_DIR = 'run48h'
 SITE = 'MTL'
 RES = [100.0, 10.0, 1000.0]
 THICK = [300.0, 3000.0]
-ANCHORS = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1, 0.032, 0.01,
-           0.0032, 0.001, 3.2e-4, 1e-4]
+ANCHORS_SPARSE = [320.0, 100.0, 32.0, 10.0, 3.2, 1.0, 0.32, 0.1, 0.032,
+                  0.01, 0.0032, 0.001, 3.2e-4, 1e-4]
+ANCHORS = densify_frequencies(ANCHORS_SPARSE, 4.0)   # 对数等间隔 4 点/倍频程
 DUR = 48 * 3600
 
 
@@ -76,7 +78,7 @@ def main():
     os.makedirs(out)
     model = os.path.join(out, 'mtl48.XMLSITE')
     build_model(model)
-    print('=== 48h 合成（%d 锚点 %g~%g Hz, 天然源）==='
+    print('=== 48h 合成（%d 锚点对数等间隔 %g~%g Hz, 天然源）==='
           % (len(ANCHORS), ANCHORS[-1], ANCHORS[0]))
     rc = synth_main(['-model', model, '-out', out, '-dur', str(DUR),
                      '-seed', '42', '-scale', '10', '-dense', '0',
@@ -84,21 +86,35 @@ def main():
     assert rc == 0, 'synthesis failed'
     dense_model = model          # -dense 0：模型即处理网格（锚点=网格点）
 
+    # 分带：(band, nfft, f_lo, f_hi, 台阶剔除, hop, 窗)
+    # 分段档(TS3/TS4)必须 hop=nfft：窗=整段（跨段时间缝的拼接窗经半窗
+    # Dirichlet 泄漏混入邻 bin 的 Z，实测 −15%）。超低频用 rect+大 nfft：
+    # Hann ±1bin 在 1e-4Hz 处混合 ±50% 的 Z（重尾），rect 整数 bin 零泄漏。
     bands = [
-        ('TS3', 4800, 75.0, 320.0, True),
-        ('TS4', 1200, 3.75, 72.0, True),
-        ('TS5', 8192, 0.075, 3.75, True),
-        ('TS5', 15000, 0.0075, 0.075, True),
-        ('TS5', 150000, 8e-5, 0.0075, False),
+        ('TS3', 4800, 75.0, 320.0, True, 4800, 'hann'),
+        ('TS4', 1200, 3.75, 72.0, True, 1200, 'hann'),
+        ('TS5', 8192, 0.075, 3.75, True, 4096, 'hann'),
+        ('TS5', 60000, 0.0075, 0.075, True, 30000, 'hann'),
+        ('TS5', 300000, 8e-5, 0.0075, False, 150000, 'hann'),
     ]
     rows = []
-    for band, nfft, flo, fhi, excl in bands:
+    for band, nfft, flo, fhi, excl, hop, win in bands:
         r = mtprocess.process_fft_bins(dense_model, out, band=band, nfft=nfft,
                                        site_name=SITE, f_min=flo, f_max=fhi,
-                                       hop=nfft // 2, exclude_cal_steps=excl)
-        print('  %s nfft=%d: %d bins (%g-%g Hz)' % (band, nfft, len(r), flo, fhi))
+                                       hop=hop, window=win,
+                                       exclude_cal_steps=excl)
+        print('  %s nfft=%d %s: %d bins (%g-%g Hz)'
+              % (band, nfft, win, len(r), flo, fhi))
         rows.extend(r)
     rows.sort(key=lambda t: t[0])
+
+    # 输出对数等间隔化：每个模型锚点取最近的处理 bin（频点=锚点网格）
+    picked = []
+    for a in ANCHORS:
+        j = min(range(len(rows)), key=lambda i: abs(math.log(rows[i][0] / a)))
+        picked.append(rows[j])
+    rows = picked
+    print('对数等间隔输出: %d 频点' % len(rows))
 
     fa = np.array([r[0] for r in rows])
     ea = np.array([abs(abs(r[1][0, 1]) / abs(r[2][0, 1]) - 1) for r in rows])
