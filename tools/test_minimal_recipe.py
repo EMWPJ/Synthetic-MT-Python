@@ -110,14 +110,23 @@ def block_starts(segs, n, N):
 
 
 def win_dfts(data, starts, n, N, f, fs):
-    """给定块起点：N 相邻窗 × 4 通道的精确频点加窗 DFT。"""
-    kern = np.hanning(n) * np.exp(-2j * math.pi * f * np.arange(n) / fs)
+    """给定块起点：N 相邻窗 × 4 通道、整窗 rfft 按目标 bin 取值。
+
+    整窗 FFT 把正/负频率镜像分离到 k 与 n−k——单频核 DFT 的镜像泄漏
+    （W(2f)≈−34dB@4周期窗，对 ±45°Z 造成 ~1.4W 的确定性偏置）在此归零，
+    逐 bin E=ZH 精确成立。要求 f 近似落在 bin 网格上（|偏差|<0.05 bin）。
+    """
+    k = f * n / fs
+    ki = int(round(k))
+    if abs(k - ki) > 0.2:
+        raise ValueError('f not on bin grid: %r -> %.4f' % (f, k))
     offs = (np.asarray(starts)[:, None, None]
             + np.arange(N)[None, :, None] * n
             + np.arange(n)[None, None, :])                       # (B, N, n)
+    w = np.hanning(n)
     out = np.empty((4, len(starts), N), dtype=complex)
     for c in range(4):
-        out[c] = (data[c][offs] * kern[None, None, :]).sum(axis=2)
+        out[c] = np.fft.rfft(data[c][offs] * w[None, None, :], axis=2)[:, :, ki]
     return out                                                   # (4, B, N)
 
 

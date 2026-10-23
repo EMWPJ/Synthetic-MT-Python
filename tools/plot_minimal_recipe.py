@@ -26,6 +26,12 @@ noise = {}
 for k, d in raw.items():
     f, wp, N = k.split('|')
     noise[(float(f), float(wp), int(N))] = {kk: np.asarray(vv) for kk, vv in d.items()}
+with io.open(os.path.join(OUT, 'min_recipe_flat.json'), encoding='utf-8') as fh:
+    flat_raw = json.load(fh)
+flat = {}
+for k, d in flat_raw.items():
+    f, wp, N = k.split('|')
+    flat[(float(f), float(wp), int(N))] = {kk: np.asarray(vv) for kk, vv in d.items()}
 
 # 模型锚点理论曲线（渲染真值口径）
 theory = dict(theoretical_impedance('syn24h/MTA_dense.XMLSITE'))
@@ -106,6 +112,16 @@ for ax, qi in ((ax1, 50), (ax2, 90)):
                 labeled.add(lab)
             ax.plot(xs, ys, ls, marker='o', color=colors[f], lw=1.4, ms=5,
                     label=lab)
+    # 平坦 Z 对照（Z 与频率无关：sqrt-f 斜率混合归零）
+    xs, ys, xs8, ys8 = [], [], [], []
+    for N in (2, 4, 8, 16):
+        if (1.0, 4.0, N) in flat:
+            xs.append(N); ys.append(100 * np.percentile(flat[(1.0, 4.0, N)]['rho_err'], qi))
+        if (1.0, 8.0, N) in flat:
+            xs8.append(N); ys8.append(100 * np.percentile(flat[(1.0, 8.0, N)]['rho_err'], qi))
+    lab = 'flat-Z model, 1 Hz, 4-period win'
+    ax.plot(xs, ys, '-s', color='k', lw=1.6, ms=6, label=None if 'flat' in labeled else lab)
+    labeled.add('flat')
     ax.axhline(1.0, color='r', lw=1.2, ls=':')
     ax.text(16.6, 1.0, '1%', color='r', fontsize=10, va='center')
     ax.set_xscale('log', base=2)
@@ -116,8 +132,8 @@ for ax, qi in ((ax1, 50), (ax2, 90)):
     ax.set_title(stat + r' $\rho_a$ relative error')
 ax1.set_ylabel('error (%)')
 ax1.legend(loc='upper right', fontsize=9)
-fig.suptitle('Convergence vs data amount: 4-period windows floor at ~2-4% '
-             '(kernel resolution); 8-period windows reach 0.5-2.4%',
+fig.suptitle('Convergence vs data amount: the floor scales with the Z slope\n'
+             '(sqrt-f: 2-4% at 4-period win; flat-Z: 0.26% at N=2 — synthesis exact)',
              fontsize=12)
 fig.tight_layout()
 p2 = os.path.join(OUT, 'min_recipe_fig2_convergence.png')
