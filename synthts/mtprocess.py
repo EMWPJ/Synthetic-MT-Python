@@ -34,6 +34,12 @@ TS_SPEC = {
     'TS4': (0.1, 75.0, 150),
     'TS5': (1e-6, 7.5, 15),
 }
+# AMT 模式：无 TS5，连续 TS4 覆盖到 0.01 Hz（与 synth.TS4_FRE_AMT 对应）
+TS_SPEC_AMT = {
+    'TS2': (10.0, 12000.0, 24000),
+    'TS3': (1.0, 1200.0, 2400),
+    'TS4': (0.01, 75.0, 150),
+}
 
 WINDOW_PERIODS = 8.0   # 窗口长 = 8 倍信号周期（需求指定）
 MIN_WIN_PERIODS = 4.0  # 逐 bin 处理的最小窗长（周期数）：nfft 必须大于 4 倍对应周期
@@ -118,10 +124,13 @@ def screen_windows(xs, fs, f, periods=WINDOW_PERIODS, threshold=0.2):
     return mask
 
 
-def pick_ts_file(freq, ts_dir, site_name):
-    """在包含该频率的 TS 文件中选"窗数最多"的一档（连续档通常覆盖远多于分段的窄带档）。"""
+def pick_ts_file(freq, ts_dir, site_name, spec=None):
+    """在包含该频率的 TS 文件中选"窗数最多"的一档（连续档通常覆盖远多于分段的窄带档）。
+
+    AMT 数据传 spec=TS_SPEC_AMT（无 TS5，连续 TS4 到 0.01 Hz）。
+    """
     best = None
-    for name, (fmin, fmax, fs) in TS_SPEC.items():
+    for name, (fmin, fmax, fs) in (spec or TS_SPEC).items():
         if not (fmin < freq < fmax):
             continue
         # 每周期至少 4 样本：频段上缘(如 TS4 的 72Hz@150Hz 仅 2 spp)的档窗长

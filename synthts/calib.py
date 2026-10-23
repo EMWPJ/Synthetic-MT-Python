@@ -88,11 +88,17 @@ _SMOOTH_CACHE = {}
 
 
 def _dense_group(band):
-    """band 组的稠密响应（cts_dense，已变换、已对齐、log10 f 升序）。"""
+    """band 组的稠密响应（cts_dense，已变换、已对齐、log10 f 升序）。
+
+    任一通道恰为 0 的行是 dll 出界点（如 Hx ~12kHz），丢弃——
+    否则网格边缘外 bin 的插值钳位到零行会得零响应。
+    """
     if band not in _SMOOTH_CACHE:
         try:
             from .cts_dense import DENSE_CTS
-            rows = sorted((r for r in DENSE_CTS if r[1] == band), key=lambda x: x[0])
+            rows = sorted((r for r in DENSE_CTS
+                           if r[1] == band and all(v != 0 for v in r[2])),
+                          key=lambda x: x[0])
         except Exception:
             rows = []
         if not rows:

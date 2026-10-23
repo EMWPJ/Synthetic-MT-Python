@@ -32,6 +32,8 @@ TS2_FRE = (10.0, 12000.0)
 TS3_FRE = (1.0, 1200.0)
 TS4_FRE = (0.1, 75.0)
 TS5_FRE = (1e-6, 7.5)
+# AMT 无 TS5 档，连续 TS4 须覆盖到 0.01 Hz（MT 的分段 TS4 仍为 0.1 Hz 下限）
+TS4_FRE_AMT = (0.01, 75.0)
 
 _SECONDS_PER_DAY = 86400.0
 
@@ -268,7 +270,7 @@ def build_schemas(tbl, mode, periods, scale):
     if mode == 'AMT':
         add('TS2', False, 24000, TS2_FRE, tbl.hsmp * 2, tbl.hsmp, tbl.l2ns / 10.0)
         add('TS3', False, 2400, TS3_FRE, tbl.hsmp * 2, 0, float(tbl.l3ns))
-        add('TS4', True, 150, TS4_FRE, 0, 0, 0.0)
+        add('TS4', True, 150, TS4_FRE_AMT, 0, 0, 0.0)
     else:
         add('TS3', False, 2400, TS3_FRE, tbl.hsmp * 2, tbl.hsmp, float(tbl.l3ns))
         add('TS4', False, 150, TS4_FRE, tbl.hsmp * 2, 0, float(tbl.l4ns))

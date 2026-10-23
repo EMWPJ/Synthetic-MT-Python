@@ -86,6 +86,16 @@ def main():
         t = np.array([calib.transform_cts(v) for v in raw[c]])
         t = np.where(np.abs(t) > 1e12, 1e12 * t / np.maximum(np.abs(t), 1e-300), t)
         ch.append(t)
+    # dll 出界点任一通道返回精确 0（如 Hx 在 ~12kHz 线圈出界）——剔除，
+    # 否则网格边缘之外的 bin 插值钳位到零行 → 响应为 0 → 渲染 NaN
+    valid = np.ones(len(grid), dtype=bool)
+    for c in range(5):
+        valid &= np.abs(ch[c]) > 0
+    dropped = [f for f, v in zip(grid, valid) if not v]
+    if dropped:
+        print('剔除 dll 出界零点: %s' % ['%.6g' % x for x in dropped])
+    grid = [f for f, v in zip(grid, valid) if v]
+    ch = [c[valid] for c in ch]
     garr = np.array(grid)
 
     # 对齐：按 band 组求 dll/稀疏 的复数中位比例并施加到该组全部网格点

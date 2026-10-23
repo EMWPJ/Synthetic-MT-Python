@@ -97,7 +97,7 @@ python tools/mt_e2e_demo.py
 | Option | Default | Description |
 |---|---|---|
 | `-model FILE [FILE ...]` | required | One or more `.XMLSITE` models. Several files = coherently-paired multi-site batch. |
-| `-mode MT\|AMT` | `MT` | `MT` writes TS3/TS4/TS5; `AMT` writes TS2/TS3/TS4. |
+| `-mode MT\|AMT` | `MT` | `MT` writes TS3/TS4/TS5; `AMT` writes TS2/TS3/TS4 (TS4 continuous, from 0.01 Hz up). |
 | `-out DIR` | required | Output directory (created if missing). |
 | `-dur SECONDS` | MT: 259200 (72 h); AMT: 3600 | Synthesis duration. |
 | `-periods N` | `4` | Mean segment length in signal periods. Dense grids: ≥ 128 recommended (the e2e demo uses 128). |
@@ -190,20 +190,33 @@ verified on seeds 7 and 123.
 
 ```bash
 pip install -e ".[plot]"
-python tools/plot_demo.py        # writes ./plot_out/fig_time_series.png + fig_rho_phase.png
+python tools/plot_demo.py         # MT: writes ./plot_out/fig_*.png (3 figures)
+python tools/plot_demo_amt.py     # AMT: writes ./plot_out_amt/fig_*_amt.png (4 figures)
 ```
 
-Draws two figures in the style of Wang et al. (2023) for a three-layer demo model
-(100/10/1000 Ω·m, H-type curve):
+Each script synthesizes the same three-layer demo model (100/10/1000 Ω·m,
+H-type curve) in its synthesis mode, then draws the paper-style figure set of
+Wang et al. (2023):
 
-- `fig_time_series.png` — channel x samplerate panel grid (rows Ex/Ey/Hx/Hy,
-  columns 2400/150/15 Hz; a 1D model has no vertical magnetic field, so Hz is
-  not drawn) plus a dual-axis PSD panel (E fields left, H fields right, one
-  curve family per samplerate) — paper Fig 5 layout;
-- `fig_rho_phase.png` — apparent resistivity and phase estimated from the
-  synthetic series by least squares vs the 1D forward theory, on a reversed
-  log frequency axis (high frequency left): theoretical black lines, synthetic
-  XY as red circles and YX as blue triangles — paper Fig 6 style.
+- `fig_time_series*.png` — channel x samplerate panel grid (rows Ex/Ey/Hx/Hy;
+  MT columns 2400/150/15 Hz, AMT columns 24 kHz/2400 Hz/150 Hz; a 1D model has
+  no vertical magnetic field, so Hz is not drawn) plus a dual-axis PSD panel
+  (E fields left, H fields right, one curve family per samplerate) — paper
+  Fig 5 layout;
+- `fig_spectrogram*.png` — per-band Hx spectrograms (the L2 burst structure);
+- `fig_rho_phase*.png` — apparent resistivity and phase estimated from the
+  synthetic series by frequency-binned least squares vs the 1D forward theory,
+  on a reversed log frequency axis (high frequency left): theoretical black
+  lines, synthetic XY as red circles and YX as blue triangles — paper Fig 6
+  style;
+- `fig_rho_phase_period_amt.png` (AMT only) — the same processed data on a
+  period axis with per-decade error statistics printed to the console.
+
+AMT recovered accuracy (1 h record, dense-CTS smooth calibration, frequency-
+binned processing vs the render-isomorphic theory): median Zxy relative error
+6.9e-4 across 0.01 Hz – 8 kHz; per-decade medians 7e-5 … 8e-3 with the 0.01–
+0.1 Hz decade at p90 3e-2 (36 periods of data in a 1 h record — statistics-
+limited, converges as 1/√(dur·f)).
 
 ## Performance (reference: MT mode, NVMe)
 
