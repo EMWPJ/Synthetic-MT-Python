@@ -34,6 +34,10 @@ synthts -model <one-or-more.XMLSITE> -out DIR [-mode MT|AMT] [-dur SECONDS]
         [-scale 1] [-seed 42] [-dense 4] [-log FILE]
         [-source noise|lines] [-preset natural|pure-l1|full-event]
         [-source-params FILE.json]
+
+# ModEM 格式兼容：正演响应/场值 → 合成测点（不合成时序，与 -model 二选一）
+synthts -modem RESPONSE.dat -out DIR [-modem-units si|raw]
+        [-modem-conjugate auto|on|off]
 ```
 
 - Exit codes: **0** success, **2** failure (message on stdout; `SYNTHTS_DEBUG=1` shows the traceback).
@@ -114,6 +118,34 @@ synthetic XY = red circles, YX = blue triangles).
 python tools/par_report.py    # lines vs noise: Z / coherence / spectral / stats table, PASS/FAIL
 ```
 
+### 7. ModEM 3-D forward response → synthetic sites (ModEM 格式兼容)
+
+```bash
+synthts -modem response.dat -out sites/          # 逐站写 <站名>.XMLSITE
+synthts -model sites/*.XMLSITE -out ts/ -dur 3600  # 再喂给常规合成
+```
+
+Parses ModEM data/response files with multiple `>` sections:
+`Full_Impedance` (ZXX/ZXY/ZYX/ZYY), `RhoPhase` (ρa/φ → Z rebuilt as
+`sqrt(ωμ0·ρa)·e^{iφ}`, already SI), `Full_Vertical_Components` (TX/TY
+tipper), and the modified-ModEM `EM_Fields` section (EPolEx..BPolHz —
+unit X/Y-polarization incident-field responses, zeros in the input file
+filled in by forward). When non-zero `EM_Fields` values are present they
+become the site fingerprint directly ("fields" path); otherwise sites are
+built as H1=(1,0)/H2=(0,1), E=Z·H, Hz=T·H ("impedance" path). Stations are
+keyed by (Code, X, Y) — grid surveys reusing one code get `_N` suffixes.
+Each station needs ≥2 complete periods. Summary JSON gains
+`"action":"modem2xmlsite"`. Defaults: SI units (impedance [mV/km]/[nT] and
+fields converted like `snrinv.edi.load_edi`; `-modem-units raw` keeps file
+units — synthesis is unaffected either way), phases passed through
+unchanged (measured ModEM output is the same +45°-style convention as
+XMLSITE/EDI; `-modem-conjugate on` flips all phases if a file ever says
+`exp(-iωt)`).
+
+Use case: turn any ModEM 3-D forward run into calibrated Phoenix
+time series at the model's station sites, or feed the XMLSITE fingerprints
+to multi-station separation research (snrinv).
+
 ## Behaviour notes
 
 - `-mode MT` → TS3/TS4/TS5; `-mode AMT` → TS2/TS3/TS4. AMT TS2 runs at 24 kHz — a 1 h
@@ -137,6 +169,8 @@ python tools/par_report.py    # lines vs noise: Z / coherence / spectral / stats
 |---|---|
 | exit 2 `模型无频点` / `全部 isNoise` | model has no (signal) frequencies — check the XMLSITE |
 | exit 2 `测点名重复` | two models resolve to the same site name (outputs would collide) |
+| exit 2 `须指定 -model … 或 -modem …` | neither input given |
+| exit 2 `无有效测点` (modem) | no station with ≥2 complete periods — check the response file |
 | exit 2 other | error text on stdout; rerun with `SYNTHTS_DEBUG=1` for the traceback |
 
 ## Output files per site

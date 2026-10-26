@@ -51,8 +51,21 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         prog='synthts',
         description='Phoenix MT 合成时间序列（RandomSegmentPartiallyWindowed，内置标定）')
-    p.add_argument('-model', required=True, nargs='+', metavar='XMLSITE',
-                   help='一个或多个 .XMLSITE 模型（批量多测点，同频点共享同源随机源）')
+    p.add_argument('-model', nargs='+', metavar='XMLSITE',
+                   help='一个或多个 .XMLSITE 模型（批量多测点，同频点共享同源随机源；'
+                        '与 -modem 二选一）')
+    p.add_argument('-modem', default='', metavar='DAT',
+                   help='ModEM 数据/响应文件（Full_Impedance / RhoPhase / '
+                        'Full_Vertical_Components / EM_Fields 多段）→ 把正演'
+                        '响应转成合成测点，逐站写 <站名>.XMLSITE 到 -out（不合成'
+                        '时序；与 -model 二选一）')
+    p.add_argument('-modem-units', default='si', choices=['si', 'raw'],
+                   help='ModEM 测点单位：si=阻抗/场值换算到 SI（默认）；raw=保留'
+                        '文件原单位（[mV/km]/[nT]）')
+    p.add_argument('-modem-conjugate', default='auto',
+                   choices=['auto', 'on', 'off'],
+                   help='相位约定：auto=实测 ModEM 与 XMLSITE/EDI 同为 +45° 口径'
+                        '，默认直通（仅段头 exp(-i 才共轭）；on/off 强制')
     p.add_argument('-mode', default='MT', choices=['MT', 'AMT'],
                    help='合成模式（MT→TS3/4/5，AMT→TS2/3/4，默认 MT）')
     p.add_argument('-out', required=True, help='输出目录')
@@ -78,6 +91,55 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
+def _run_modem(args, say, t0):
+    """-modem 分支：ModEM 正演响应/场值 → 合成测点（XMLSITE），不合成时序。"""
+    from .modem import parse_modem_response, sites_from_response, \
+        write_modem_sites
+    conj = {'auto': 'auto', 'on': True, 'off': False}[args.modem_conjugate]
+    resp = parse_modem_response(args.modem)
+    say('SynthTS(Python) — ModEM 响应 → 合成测点')
+    say('  modem  : %s' % args.modem)
+    say('  sections: %s' % ('; '.join('%s(%s)' % (n, u or 'units?')
+                                     for n, u, sgn in resp.sections)))
+    if not resp.data:
+        raise ValueError('ModEM 文件无数据行: %s' % args.modem)
+    say('  path   : %s（%d 周期 %.4g–%.4g s，%d 站）'
+        % (resp.conversion_path, len(resp.periods), resp.periods[0],
+           resp.periods[-1], len(resp.station_keys())))
+    sites = sites_from_response(resp, to_si=(args.modem_units == 'si'),
+                                conjugate=conj)
+    if not sites:
+        raise ValueError('无有效测点（每站需 ≥2 个完整频点）')
+    conj_used = (conj is True if conj != 'auto'
+                 else bool(resp.sections)
+                 and all(sgn == '-i' for _, _, sgn in resp.sections))
+    files = write_modem_sites(sites, args.out)
+    for p in files:
+        say('  site  : %s' % p)
+    say('DONE (%.1f s)' % (time.time() - t0))
+    summary = {
+        'tool': 'synthts', 'version': __version__,
+        'action': 'modem2xmlsite',
+        'modem': args.modem,
+        'sections': [n for n, _, _ in resp.sections],
+        'conversion_path': resp.conversion_path,
+        'conjugated': bool(conj_used),
+        'units': args.modem_units,
+        'n_periods': len(resp.periods),
+        'period_range_s': [resp.periods[0], resp.periods[-1]],
+        'sites': [s.name for s in sites],
+        'n_sites': len(sites),
+        'n_freqs': [len(s.fields) for s in sites],
+        'out_dir': os.path.abspath(args.out),
+        'files': [f.replace('\\', '/') for f in files],
+        'n_files': len(files),
+        'summary_v': 2,
+        'elapsed_s': round(time.time() - t0, 3),
+    }
+    print('SYNTHTS_SUMMARY ' + json.dumps(summary, ensure_ascii=False))
+    return 0
+
+
 def main(argv=None):
     args = parse_args(argv)
     t0 = time.time()
@@ -94,6 +156,10 @@ def main(argv=None):
         say = print
 
     try:
+        if args.modem:
+            return _run_modem(args, say, t0)
+        if not args.model:
+            raise ValueError('须指定 -model <XMLSITE...> 或 -modem <DAT>（二选一）')
         if args.mode == 'AMT':
             tbl_path = os.path.join(calib.ASSETS_DIR, 'AMT', 'DEFAULT.TBL')
         else:

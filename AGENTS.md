@@ -46,6 +46,8 @@ synthts/
 ├── cts_mt/cts_amt    # embedded sparse calibration tables (bands 3/4/5 and 2-5)
 ├── cts_dense.py      # dense CTS (syscal_dll-generated; tools/gen_dense_cts.py)
 ├── phoenix_ts.py     # TBL + TS binary writer (Phoenix byte format)
+├── modem.py          # ModEM data/response → XMLSITE sites (multi-section:
+│                     #   Full_Impedance / RhoPhase / tipper / EM_Fields)
 └── source_params.py  # noise presets + L4 schema validation
 ```
 
@@ -96,6 +98,11 @@ theory. Any render change usually needs the matching processing-side change.
   path keeps both sides False.
 - MT phases are folded to (−90°, 90°] for display; a pure sign flip of Z is
   invisible after folding, a convention conjugation is not.
+- ModEM output phases are empirically the same +45°-style convention as
+  XMLSITE/EDI (measured on the EMWPJ COMMEMI3D-2A example: folded ZYX phase
+  +48.6°, fields section consistent with the impedance section) — even though
+  the file header loosely says `exp(iωt)`. `synthts.modem` passes phases
+  through by default; do not conjugate on the strength of that header line.
 - Odd/even record lengths: never infer n from the rfft length (`n ≡ 0 mod 4`
   is ambiguous) — pass n explicitly.
 
