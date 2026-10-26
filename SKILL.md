@@ -118,12 +118,28 @@ synthetic XY = red circles, YX = blue triangles).
 python tools/par_report.py    # lines vs noise: Z / coherence / spectral / stats table, PASS/FAIL
 ```
 
-### 7. ModEM 3-D forward response → synthetic sites (ModEM 格式兼容)
+### 7. ModEM 3-D forward → synthetic sites (ModEM 格式兼容, 4 步工作流)
 
 ```bash
-synthts -modem response.dat -out sites/          # 逐站写 <站名>.XMLSITE
-synthts -model sites/*.XMLSITE -out ts/ -dur 3600  # 再喂给常规合成
+# 1) 常规 ModEM dat 补 EM_Fields 占位段（改版 ModEM 才会输出场值）
+synthts -modem-add-fields datafile.dat -out datafile_fields.dat
+# 2) 改版 ModEM（EMWPJ exe）正演：
+#    ModEM.exe -F model datafile_fields.dat response.dat fields.E modempar
+# 3) 正演响应/场值 → 合成测点（逐站写 <站名>.XMLSITE）
+synthts -modem response.dat -out sites/
+# 4) 测点 → Phoenix 时序
+synthts -model sites/*.XMLSITE -out ts/ -dur 3600
 ```
+
+Step 1 appends a `> EM_Fields` section to an ordinary ModEM dat: for every
+(period, station) record in the source's own enumeration order, ten rows
+`EPolEx..EPolHz BPolEx..BPolHz` initialized to 0 with error `2.0E+15`
+(the modified ModEM fills these in-place after the forward). The source
+file's bytes are preserved verbatim as the prefix; counts/units/exp header
+lines are copied from the source's first section. Refuses files that
+already contain an EM_Fields section. Summary JSON gains
+`"action":"modem_add_fields"`. Step 3 accepts the resulting response file
+(see below).
 
 Parses ModEM data/response files with multiple `>` sections:
 `Full_Impedance` (ZXX/ZXY/ZYX/ZYY), `RhoPhase` (ρa/φ → Z rebuilt as

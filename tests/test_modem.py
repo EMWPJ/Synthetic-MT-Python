@@ -5,7 +5,8 @@ import os
 
 import pytest
 
-from synthts.modem import (MU0, ModemResponse, parse_modem_response,
+from synthts.modem import (MU0, ModemResponse, _EM_COMPS,
+                           add_em_fields, parse_modem_response,
                            sites_from_response, write_modem_sites)
 from synthts.model import load_site
 
@@ -30,11 +31,12 @@ def _dat(imp_row=None, tip_row=None, fld_row=None, counts='2     2',
     return '\n'.join(secs) + '\n'
 
 
-def _imp_rows(per, code, zxy=(166.4968, 192.9013), zyx=(-130.0816, -147.4482)):
+def _imp_rows(per, code, zxy=(166.4968, 192.9013), zyx=(-130.0816, -147.4482),
+              elev=0.0):
     lat, lon, x, y = 30.0, 113.0, -1000.0, 2000.0
     return '\n'.join(
-        '%.6E  %s  %.7f %.7f  %.1f %.1f 0.000  %s  %.6E  %.6E  2.0E+15'
-        % (per, code, lat, lon, x, y, comp, re_, im_)
+        '%.6E  %s  %.7f %.7f  %.1f %.1f %.3f  %s  %.6E  %.6E  2.0E+15'
+        % (per, code, lat, lon, x, y, elev, comp, re_, im_)
         for comp, (re_, im_) in (('ZXX', (1.0, -1.0)),
                                  ('ZXY', zxy),
                                  ('ZYX', zyx),
@@ -66,7 +68,7 @@ def test_parse_multisection_impedance(tmp_path):
     assert r.conversion_path == 'impedance'
     keys = r.station_keys()
     assert [k[0] for k in keys] == ['S1', 'S2']
-    assert r.coords[keys[0]] == (30.0, 113.0)
+    assert r.coords[keys[0]] == (30.0, 113.0, 0.0)
     sites = sites_from_response(r)
     assert [s.name for s in sites] == ['S1']            # S2 仅 1 频点 → 剔除
     s1 = sites[0]
@@ -195,3 +197,65 @@ def test_empty_response_rejected(tmp_path):
     p = _write(tmp_path, '# nothing here\n', name='empty.dat')
     r = parse_modem_response(p)
     assert r.data == {} and r.periods == []
+
+
+def test_add_em_fields_section(tmp_path):
+    """补 EM_Fields 段：源内容逐字节保留 + 追加规范占位段（站位主序）。"""
+    rows = '\n'.join([_imp_rows(1.0E-3, 'S1'), _imp_rows(1.0E-2, 'S1'),
+                      _imp_rows(1.0E-3, 'S2'), _imp_rows(1.0E-2, 'S2')])
+    tip = '\n'.join([_tip_rows(1.0E-3, 'S1'), _tip_rows(1.0E-2, 'S1')])
+    src = _write(tmp_path, _dat(imp_row=rows, tip_row=tip), name='in.dat')
+    src_bytes = open(src, 'rb').read()
+    dst = str(tmp_path / 'out.dat')
+    info = add_em_fields(src, dst)
+    assert info['n_periods'] == 2 and info['n_stations'] == 2
+    assert info['n_records'] == 4 and info['n_rows'] == 40
+    out = open(dst, 'rb').read()
+    assert out[:len(src_bytes)] == src_bytes            # 源内容逐字节保留
+    lines = out[len(src_bytes):].decode('ascii').splitlines()
+    assert lines[2] == '>  EM_Fields'
+    assert lines[7].lstrip('>').split() == ['2', '2']               # >%8d%6d 计数行
+    data = lines[8:]
+    assert len(data) == 40
+    rec0 = data[0].split()
+    assert rec0[7] == 'EPolEx' and rec0[8] == '0.000000E+00'
+    assert [ln.split()[7] for ln in data[:10]] == list(_EM_COMPS)
+    # 枚举序跟随源文件：S1(1e-3, 1e-2) → S2(1e-3, 1e-2)
+    order = [(ln.split()[0], ln.split()[1]) for ln in data[::10]]
+    assert order == [('1.000000E-03', 'S1'), ('1.000000E-02', 'S1'),
+                     ('1.000000E-03', 'S2'), ('1.000000E-02', 'S2')]
+
+
+def test_add_em_fields_elev_and_periodmajor(tmp_path):
+    """高程列保真；周期主序源文件 → 生成段同为周期主序。"""
+    rows = '\n'.join([_imp_rows(1.0E-3, 'S1', elev=12.5),
+                      _imp_rows(1.0E-3, 'S2', elev=12.5),
+                      _imp_rows(1.0E-2, 'S1', elev=12.5),
+                      _imp_rows(1.0E-2, 'S2', elev=12.5)])
+    src = _write(tmp_path, _dat(imp_row=rows), name='pm.dat')
+    dst = str(tmp_path / 'pm_out.dat')
+    add_em_fields(src, dst)
+    lines = open(dst, 'rb').read().decode('ascii').splitlines()
+    tail = lines[lines.index('>  EM_Fields') + 5:]
+    assert tail[0].lstrip('>').split() == ['2', '2']                # 计数行
+    data = tail[1:]
+    assert data[0].split()[6] == '12.500'               # 高程列保真
+    order = [(ln.split()[0], ln.split()[1]) for ln in data[::10]]
+    assert order == [('1.000000E-03', 'S1'), ('1.000000E-03', 'S2'),
+                     ('1.000000E-02', 'S1'), ('1.000000E-02', 'S2')]
+
+
+def test_add_em_fields_refusals(tmp_path):
+    """已含 EM_Fields 段 / src==dst / '..' 路径 一律拒绝。"""
+    rows = '\n'.join([_imp_rows(1.0E-3, 'S1'), _imp_rows(1.0E-2, 'S1')])
+    src = _write(tmp_path, _dat(imp_row=rows), name='r.dat')
+    dst = str(tmp_path / 'r2.dat')
+    add_em_fields(src, dst)
+    with pytest.raises(ValueError, match='已含'):
+        add_em_fields(dst, str(tmp_path / 'r3.dat'))    # 产物再补 → 拒绝
+    with pytest.raises(ValueError, match='不同'):
+        add_em_fields(src, src)
+    with pytest.raises(ValueError, match='\\.\\.'):
+        add_em_fields(src, str(tmp_path / 'a' / '..' / 'b.dat'))
+    with pytest.raises(ValueError, match='\\.\\.'):
+        add_em_fields('../x.dat', str(tmp_path / 'y.dat'))

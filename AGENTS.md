@@ -47,7 +47,9 @@ synthts/
 ├── cts_dense.py      # dense CTS (syscal_dll-generated; tools/gen_dense_cts.py)
 ├── phoenix_ts.py     # TBL + TS binary writer (Phoenix byte format)
 ├── modem.py          # ModEM data/response → XMLSITE sites (multi-section:
-│                     #   Full_Impedance / RhoPhase / tipper / EM_Fields)
+│                     #   Full_Impedance / RhoPhase / tipper / EM_Fields);
+│                     #   add_em_fields appends an EM_Fields placeholder
+│                     #   section for the modified exe's forward runs
 └── source_params.py  # noise presets + L4 schema validation
 ```
 
@@ -103,6 +105,11 @@ theory. Any render change usually needs the matching processing-side change.
   +48.6°, fields section consistent with the impedance section) — even though
   the file header loosely says `exp(iωt)`. `synthts.modem` passes phases
   through by default; do not conjugate on the strength of that header line.
+- The modified-ModEM exe parses dat sections with a FIXED structure: each
+  section is exactly 2 `#` comment lines + 6 `>` header lines + data rows.
+  A third comment line is consumed as the data-type declaration (fails with
+  `Unknown data type: Period(s) …`, truncated at a fixed width) — this is
+  what broke the Jianghan prep before; `add_em_fields` emits exactly 2.
 - Odd/even record lengths: never infer n from the rfft length (`n ≡ 0 mod 4`
   is ambiguous) — pass n explicitly.
 

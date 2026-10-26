@@ -66,6 +66,10 @@ def parse_args(argv=None):
                    choices=['auto', 'on', 'off'],
                    help='相位约定：auto=实测 ModEM 与 XMLSITE/EDI 同为 +45° 口径'
                         '，默认直通（仅段头 exp(-i 才共轭）；on/off 强制')
+    p.add_argument('-modem-add-fields', default='', metavar='DAT',
+                   help='常规 ModEM dat → 补 EM_Fields 占位段（EPol*/BPol* 十行、'
+                        '初值 0）写新 dat，供改版 ModEM 正演回填场值；-out 为输出'
+                        ' dat 路径（与 -model/-modem 互斥）')
     p.add_argument('-mode', default='MT', choices=['MT', 'AMT'],
                    help='合成模式（MT→TS3/4/5，AMT→TS2/3/4，默认 MT）')
     p.add_argument('-out', required=True, help='输出目录')
@@ -89,6 +93,39 @@ def parse_args(argv=None):
                    help='noise 源参数覆盖 JSON（schema 见 synthts/source_params.py；'
                         '不含 seed/起点）')
     return p.parse_args(argv)
+
+
+def _run_modem_add_fields(args, say, t0):
+    """-modem-add-fields 分支：常规 dat 补 EM_Fields 占位段（不合成）。"""
+    from .modem import add_em_fields
+    out = os.path.abspath(args.out)
+    if args.out.replace('\\', '/').endswith('/'):
+        raise ValueError('-modem-add-fields 的 -out 须为输出 dat 文件路径，'
+                         '不是目录: %r' % args.out)
+    say('SynthTS(Python) — ModEM dat 补 EM_Fields 占位段')
+    say('  input : %s' % args.modem_add_fields)
+    say('  output: %s' % out)
+    info = add_em_fields(args.modem_add_fields, out)
+    say('  source sections: %s' % ', '.join(info['sections']))
+    say('  grid  : %d 周期 × %d 站 = %d 组 → 追加 %d 行（初值 0，误差 2.0E+15）'
+        % (info['n_periods'], info['n_stations'], info['n_records'],
+           info['n_rows']))
+    say('DONE (%.1f s)' % (time.time() - t0))
+    summary = {
+        'tool': 'synthts', 'version': __version__,
+        'action': 'modem_add_fields',
+        'input': args.modem_add_fields,
+        'output': out.replace('\\', '/'),
+        'sections': info['sections'],
+        'n_periods': info['n_periods'],
+        'n_stations': info['n_stations'],
+        'n_records': info['n_records'],
+        'n_rows_added': info['n_rows'],
+        'summary_v': 2,
+        'elapsed_s': round(time.time() - t0, 3),
+    }
+    print('SYNTHTS_SUMMARY ' + json.dumps(summary, ensure_ascii=False))
+    return 0
 
 
 def _run_modem(args, say, t0):
@@ -156,10 +193,13 @@ def main(argv=None):
         say = print
 
     try:
+        if args.modem_add_fields:
+            return _run_modem_add_fields(args, say, t0)
         if args.modem:
             return _run_modem(args, say, t0)
         if not args.model:
-            raise ValueError('须指定 -model <XMLSITE...> 或 -modem <DAT>（二选一）')
+            raise ValueError('须指定 -model <XMLSITE...> / -modem <DAT> / '
+                             '-modem-add-fields <DAT>（三选一）')
         if args.mode == 'AMT':
             tbl_path = os.path.join(calib.ASSETS_DIR, 'AMT', 'DEFAULT.TBL')
         else:

@@ -57,10 +57,16 @@ class ModemResponse:
         self.fmt_z = ''              # 阻抗段的格式名（rhophase 判定用）
         self.periods = []            # 去重排序的周期(s)
         self.stations = {}           # code -> [(x, y), ...]（按出现序）
-        self.coords = {}             # (code, x, y) -> (lat, lon)
+        self.coords = {}             # (code, x, y) -> (lat, lon, elev_m)
+        self.record_order = []       # (per, code, x, y) 文件首现序（跨段去重）
+        self.header_proto = {}       # 首段头行原型：exp/elev/origin（含 '>'）
         self.data = {}               # (code, x, y) -> {(period, comp): complex}
         self.fields_present = False  # 是否含 EPol*/BPol* 分量
         self.fields_nonzero = False  # 场值分量是否有非零（正演已回填）
+
+    @property
+    def has_em_fields(self):
+        return any(name == 'em_fields' for name, _, _ in self.sections)
 
     @property
     def rhophase(self):
@@ -92,7 +98,8 @@ def parse_modem_response(path):
     """读 ModEM 数据/响应文件 → ModemResponse（容忍残缺行，静默跳过）。
 
     段头为连续若干 `>` 行：格式名行起一段，随后的 exp/单位行并入当前段
-    元数据，遇首条数据行（或下一段名/文件尾）时该段定稿。
+    元数据，遇首条数据行（或下一段名/文件尾）时该段定稿。首段的 exp/
+    单值行/坐标行另存 header_proto（add_em_fields 重建段头用）。
     """
     _check_read(path)
     resp = ModemResponse()
@@ -125,8 +132,26 @@ def parse_modem_response(path):
                     if cur is not None:
                         cur['sign'] = ('-i' if '-i' in low.replace(' ', '')
                                        else '+i')
+                    if cur is not None and len(resp.sections) == 0 \
+                            and 'exp' not in resp.header_proto:
+                        resp.header_proto['exp'] = s
                 if '[' in s and cur is not None:
                     cur['units'] = s.lstrip('> ')
+                t = s.lstrip('> ').split()
+                if len(t) == 1:
+                    try:
+                        float(t[0])
+                        if len(resp.sections) == 0 and cur is not None:
+                            resp.header_proto.setdefault('elev_line', s)
+                    except ValueError:
+                        pass
+                elif len(t) == 2:
+                    try:
+                        float(t[0]), float(t[1])
+                        if len(resp.sections) == 0 and cur is not None:
+                            resp.header_proto.setdefault('origin_line', s)
+                    except ValueError:
+                        pass          # 周期数/站数行（两个整数）
                 continue
             if cur is not None:
                 _flush()
@@ -141,6 +166,7 @@ def parse_modem_response(path):
                 lon = float(t[3])
                 x = float(t[4])
                 y = float(t[5])
+                elev = float(t[6])
                 comp = t[7].upper()
                 re_, im_ = float(t[8]), float(t[9])
             except (ValueError, IndexError):
@@ -150,7 +176,9 @@ def parse_modem_response(path):
             xys = resp.stations.setdefault(code, [])
             if (x, y) not in xys:
                 xys.append((x, y))
-            resp.coords[(code, x, y)] = (lat, lon)
+            resp.coords[(code, x, y)] = (lat, lon, elev)
+            if (per, code, x, y) not in resp.record_order:
+                resp.record_order.append((per, code, x, y))
             resp.data.setdefault((code, x, y), {})[(per, comp)] = \
                 complex(re_, im_)
             if comp in _F_COMPS:
@@ -224,7 +252,7 @@ def sites_from_response(resp, to_si=True, conjugate='auto'):
     sites = []
     for key in resp.station_keys():
         code, x, y = key
-        lat, lon = resp.coords.get(key, (0.0, 0.0))
+        lat, lon = resp.coords.get(key, (0.0, 0.0, 0.0))[:2]
         name = code if len(resp.stations.get(code, [])) == 1 \
             else '%s_%d' % (code,
                             resp.stations[code].index((x, y)) + 1)
@@ -293,3 +321,74 @@ def write_modem_sites(sites, out_dir):
         save_site(site, path)
         paths.append(path)
     return paths
+
+
+# ── EM_Fields 占位段补充（改版 ModEM 正演的前置准备）─────────────────────
+#
+# 常规 ModEM 的 dat 只有阻抗/倾子段；改版 ModEM（EMWPJ）约定：在数据文件
+# 末尾追加一个 `> EM_Fields` 段，每 (周期, 测站) 一组 EPolEx..BPolHz 十行、
+# 初值 0、误差列 2.0E+15（inversion 忽略量），正演后程序把单位 X/Y 极化
+# 入射场的各站响应原位回填（COMMEMI3D-2A 例子即此结构）。本函数按源文件
+# 自己的 (周期, 测站) 首现序生成该段——行枚举与源文件的阻抗段完全一致。
+
+_EM_COMPS = ('EPolEx', 'EPolEy', 'EPolHx', 'EPolHy', 'EPolHz',
+             'BPolEx', 'BPolEy', 'BPolHx', 'BPolHy', 'BPolHz')
+
+
+def _safe_path(p, what):
+    """显式路径守卫：拒 '..'（原始串与归一化结果都不得含 ..），返回规范化绝对路径。"""
+    raw = str(p).replace(chr(92), '/')
+    if '..' in raw.split('/'):
+        raise ValueError('%s 路径不得包含 ..: %r' % (what, p))
+    norm = os.path.normpath(os.path.abspath(str(p)))
+    if '..' in norm.replace(chr(92), '/').split('/'):
+        raise ValueError('%s 路径不得包含 ..: %r' % (what, p))
+    return norm
+
+
+def add_em_fields(src, dst):
+    """常规 ModEM dat → 追加 EM_Fields 占位段的新 dat（源内容逐字节保留）。
+
+    返回 dict(n_periods, n_stations, n_records, n_rows)。源文件已含
+    EM_Fields 段、无数据行、或 src==dst 时拒绝。
+    """
+    src = _safe_path(src, 'modem 输入')
+    dst = _safe_path(dst, 'modem 输出')
+    if src == dst:
+        raise ValueError('输出文件须与输入不同: %r' % src)
+    resp = parse_modem_response(src)
+    if resp.has_em_fields:
+        raise ValueError('源文件已含 EM_Fields 段: %s' % src)
+    if not resp.record_order:
+        raise ValueError('ModEM 文件无数据行: %s' % src)
+    proto = resp.header_proto
+    exp_line = proto.get('exp', '>  exp(i\\omega t)')
+    elev_line = proto.get('elev_line', '>     0.00')
+    origin_line = proto.get('origin_line', '>    0.000   0.000')
+    per_set = sorted({r[0] for r in resp.record_order})
+    sta_set = {r[1] for r in resp.record_order}
+    lines = ['# synthts: EM_Fields placeholder (zeros; modified ModEM fills'
+             ' after forward)',
+             '# Period(s) Code GG_Lat GG_Lon X(m) Y(m) Z(m) Component Real Imag Error',
+             '>  EM_Fields',
+             exp_line,
+             '>  [mV/km]/[nT]',
+             elev_line,
+             origin_line,
+             '>%8d%6d' % (len(per_set), len(sta_set))]
+    # 注意：改版 exe 按固定结构分段——每段恰好 2 行 '#' 注释 + 6 行 '>' 头
+    # （实测：多出的注释行会被当成数据类型声明，报 Unknown data type）
+    for per, code, x, y in resp.record_order:
+        lat, lon, elev = resp.coords.get((code, x, y), (0.0, 0.0, 0.0))
+        for comp in _EM_COMPS:
+            lines.append(
+                '%.6E  %-8s  %.7f %.7f  %.3f %.3f %.3f  %-6s  '
+                '0.000000E+00  0.000000E+00  2.000000E+15'
+                % (per, code, lat, lon, x, y, elev, comp))
+    from pathlib import Path
+    body = ''.join(ln + '\r\n' for ln in lines).encode('ascii')
+    Path(dst).write_bytes(Path(src).read_bytes() + body)
+    return {'n_periods': len(per_set), 'n_stations': len(sta_set),
+            'n_records': len(resp.record_order),
+            'n_rows': len(resp.record_order) * len(_EM_COMPS),
+            'sections': [n for n, _, _ in resp.sections]}
