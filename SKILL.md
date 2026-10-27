@@ -151,12 +151,17 @@ become the site fingerprint directly ("fields" path); otherwise sites are
 built as H1=(1,0)/H2=(0,1), E=Z·H, Hz=T·H ("impedance" path). Stations are
 keyed by (Code, X, Y) — grid surveys reusing one code get `_N` suffixes.
 Each station needs ≥2 complete periods. Summary JSON gains
-`"action":"modem2xmlsite"`. Defaults: SI units (impedance [mV/km]/[nT] and
-fields converted like `snrinv.edi.load_edi`; `-modem-units raw` keeps file
-units — synthesis is unaffected either way), phases passed through
-unchanged (measured ModEM output is the same +45°-style convention as
-XMLSITE/EDI; `-modem-conjugate on` flips all phases if a file ever says
-`exp(-iωt)`).
+`"action":"modem2xmlsite"`. Defaults: SI units (impedance [mV/km]/[nT]
+×1e-6/(1e-9/μ0); EM_Fields is already SI — E [V/m] passthrough, H is
+magnetic flux density B [T] ×1/μ0 → A/m, so E/H equals the site impedance;
+the section's `[mV/km]/[nT]` header line is boilerplate copied from the
+impedance section); `-modem-units raw` keeps file units. Phases pass
+through unchanged (measured ModEM output is the same +45°-style convention
+as XMLSITE/EDI; `-modem-conjugate on` flips all phases if a file ever says
+`exp(-iωt)`). Note: the fields and impedance sections are two evaluation
+paths of the modified exe — they agree to ~1e-6 at long periods but can
+diverge ~20% at the shortest periods a coarse grid cannot resolve
+(COMMEMI at T=0.001 s); the fields path trusts the fields section.
 
 Use case: turn any ModEM 3-D forward run into calibrated Phoenix
 time series at the model's station sites, or feed the XMLSITE fingerprints

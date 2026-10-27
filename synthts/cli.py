@@ -99,7 +99,7 @@ def _run_modem_add_fields(args, say, t0):
     """-modem-add-fields 分支：常规 dat 补 EM_Fields 占位段（不合成）。"""
     from .modem import add_em_fields
     out = os.path.abspath(args.out)
-    if args.out.replace('\\', '/').endswith('/'):
+    if args.out.replace('\\', '/').endswith('/') or os.path.isdir(out):
         raise ValueError('-modem-add-fields 的 -out 须为输出 dat 文件路径，'
                          '不是目录: %r' % args.out)
     say('SynthTS(Python) — ModEM dat 补 EM_Fields 占位段')
@@ -193,6 +193,11 @@ def main(argv=None):
         say = print
 
     try:
+        given = [x for x in (bool(args.model), bool(args.modem),
+                             bool(args.modem_add_fields)) if x]
+        if len(given) > 1:
+            raise ValueError('-model / -modem / -modem-add-fields 三选一'
+                             '（同时给了多个）')
         if args.modem_add_fields:
             return _run_modem_add_fields(args, say, t0)
         if args.modem:

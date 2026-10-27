@@ -107,7 +107,7 @@ def test_rhophase_reconstruction(tmp_path):
 
 
 def test_fields_path_and_units(tmp_path):
-    """EM_Fields 段非零 → fields 路径，10 复数直取（SI 换算）。"""
+    """EM_Fields 段非零 → fields 路径；实为 SI：E[V/m] 直通、B[T]→H[A/m]×1/μ0。"""
     vals = dict(EPOLEX=(1.0, 2.0), EPOLEY=(3.0, -4.0), EPOLHX=(0.5, 0.25),
                 EPOLHY=(0.0, 0.125), EPOLHZ=(0.0, 0.0),
                 BPOLEX=(-1.0, 0.5), BPOLEY=(2.0, 2.0), BPOLHX=(1.0, 1.0),
@@ -124,9 +124,69 @@ def test_fields_path_and_units(tmp_path):
     assert site.name == 'S1' and len(site.fields) == 2
     f0 = site.fields[0]
     assert f0.frequency == pytest.approx(1000.0)
-    e_fac, h_fac = 1e-6, 1e-9 / MU0
-    assert f0.ex1 == pytest.approx(complex(1.0, 2.0) * e_fac)
-    assert f0.hz2 == pytest.approx(complex(0.0, -1.0) * h_fac)
+    assert f0.ex1 == pytest.approx(complex(1.0, 2.0))          # E 已是 V/m
+    assert f0.hz2 == pytest.approx(complex(0.0, -1.0) / MU0)   # B[T]→A/m
+
+
+def test_fields_impedance_consistency(tmp_path):
+    """回归（真数据结论）：场值路径的 E/H 精确等于阻抗段 SI 值。
+
+    构造一致性文件：ZXY=Z_0（[mV/km]/[nT]），场值段 E/H[T] = Z_SI/μ0
+    （COMMEMI 实测关系），两条路径应给出同一指纹 E/H。
+    """
+    z0 = complex(166.4968, 192.9013)                    # [mV/km]/[nT]
+    z_si = z0 * (1e-6 / (1e-9 / MU0))
+    h_t = complex(2.4e-14, 3.0e-14)                     # B [T]（X 极化 Hx）
+    e_v = z_si / MU0 * h_t                              # E [V/m]（Ey）
+    imp = '\n'.join(
+        '%.6E  S1  30.0 113.0  -1000.0 2000.0 0.000  %s  %.6E  %.6E  2.0E+15'
+        % (per, comp, z0.real, z0.imag)
+        for per in (1.0E-3, 1.0E-2)
+        for comp in ('ZXX', 'ZXY', 'ZYX', 'ZYY'))
+    fld_vals = dict(EPOLEX=(0.0, 0.0), EPOLEY=(e_v.real, e_v.imag),
+                    EPOLHX=(h_t.real, h_t.imag), EPOLHY=(0.0, 0.0),
+                    EPOLHZ=(0.0, 0.0), BPOLEX=(0.0, 0.0), BPOLEY=(0.0, 0.0),
+                    BPOLHX=(0.0, 0.0), BPOLHY=(1.0, 0.0), BPOLHZ=(0.0, 0.0))
+    fld = '\n'.join(
+        '%.6E  S1  30.0 113.0  -1000.0 2000.0 0.000  %s  %.8E  %.8E  2.0E+15'
+        % (per, comp, re_, im_)
+        for per in (1.0E-3, 1.0E-2) for comp, (re_, im_) in fld_vals.items())
+    # 文件里同时含阻抗段与回填场值段 → 场值路径
+    r = parse_modem_response(_write(tmp_path, _dat(imp_row=imp, fld_row=fld),
+                                    name='c.dat'))
+    s_fields = sites_from_response(r)[0]
+    # 纯阻抗文件 → 阻抗路径
+    r2 = parse_modem_response(_write(tmp_path, _dat(imp_row=imp),
+                                     name='i.dat'))
+    s_imp = sites_from_response(r2)[0]
+    zf = s_fields.fields[0].ey1 / s_fields.fields[0].hx1
+    zi = s_imp.fields[0].ey1 / s_imp.fields[0].hx1
+    assert zf == pytest.approx(zi, rel=1e-6)            # 场值 E/H == 阻抗 SI
+    assert zf == pytest.approx(z_si, rel=1e-6)
+
+
+def test_zero_placeholder_rows_fallback(tmp_path):
+    """全零占位行跳过；场值不足 2 个频点的站回退阻抗路径。"""
+    imp = '\n'.join([_imp_rows(1.0E-3, 'S1'), _imp_rows(1.0E-2, 'S1')])
+    zeros = dict((c, (0.0, 0.0)) for c in
+                 ('EPOLEX', 'EPOLEY', 'EPOLHX', 'EPOLHY', 'EPOLHZ',
+                  'BPOLEX', 'BPOLEY', 'BPOLHX', 'BPOLHY', 'BPOLHZ'))
+    one = dict(zeros)
+    one['EPOLEX'] = (1.0, 1.0)                          # 仅 1 个频点回填
+    fld = '\n'.join(
+        '%.6E  S1  30.0 113.0  -1000.0 2000.0 0.000  %s  %.6E  %.6E  2.0E+15'
+        % (per, comp, re_, im_)
+        for per, vals in ((1.0E-3, one), (1.0E-2, zeros))
+        for comp, (re_, im_) in vals.items())
+    r = parse_modem_response(_write(tmp_path, _dat(imp_row=imp, fld_row=fld),
+                                    name='z.dat'))
+    site = sites_from_response(r)[0]
+    # 场值只有 1 个有效频点（另一行全零跳过）→ 回退阻抗路径：
+    # H 基为单位极化（hx1=1），E 为 Z·H
+    assert len(site.fields) == 2
+    assert site.fields[0].hx1 == 1.0 + 0j
+    assert site.fields[0].ex1 == pytest.approx(
+        complex(1.0, -1.0) * (1e-6 / (1e-9 / MU0)))
 
 
 def test_conjugate_auto_passthrough_and_forced(tmp_path):
@@ -243,6 +303,20 @@ def test_add_em_fields_elev_and_periodmajor(tmp_path):
     order = [(ln.split()[0], ln.split()[1]) for ln in data[::10]]
     assert order == [('1.000000E-03', 'S1'), ('1.000000E-03', 'S2'),
                      ('1.000000E-02', 'S1'), ('1.000000E-02', 'S2')]
+
+
+def test_add_em_fields_station_count_positions(tmp_path):
+    """同码多坐标（网格复用码）→ counts 行按唯一站位 (code,x,y) 计。"""
+    a = _imp_rows(1.0E-3, '001') + '\n' + _imp_rows(1.0E-2, '001')
+    b = (_imp_rows(1.0E-3, '001') + '\n' + _imp_rows(1.0E-2, '001')
+         ).replace('-1000.0', '-3000.0')
+    src = _write(tmp_path, _dat(imp_row=a + '\n' + b), name='mc.dat')
+    dst = str(tmp_path / 'mc_out.dat')
+    info = add_em_fields(src, dst)
+    assert info['n_stations'] == 2 and info['n_records'] == 4
+    lines = open(dst, 'rb').read().decode('ascii').splitlines()
+    counts = lines[lines.index('>  EM_Fields') + 5].lstrip('>').split()
+    assert counts == ['2', '2']                        # 2 周期 × 2 站位
 
 
 def test_add_em_fields_refusals(tmp_path):

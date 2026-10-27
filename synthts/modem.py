@@ -27,10 +27,15 @@ ModEM 数据/响应文件为逐行 ASCII，每个记录一行：
     XMLSITE（layered_impedance，e^{−iωt}）和 EDI 相同，默认直通不
     共轭；仅当段头明写 exp(-i 时才共轭（conjugate='auto'）。
   - 单位默认换算到 SI：阻抗 [mV/km]/[nT]→(V/m)/(A/m) ×1e-6/(1e-9/μ0)，
-    场值 E mV/km→V/m、H nT→A/m（B=μ0H）——与 snrinv/edi.to_si 同式；
-    raw 保留文件原单位（合成不受影响：渲染按自然场幅值重归一 H）。
-    注：实测 EM_Fields 段的 E 值与阻抗段差 ×1000（E 疑为 V/km）——
-    差一个常数标度，被渲染端的自然幅值归一吸收，不影响合成与分离。
+    与 snrinv/edi.to_si 同式。**EM_Fields 段实为 SI：E [V/m]，H 是磁通
+    密度 B [T]**（实测 COMMEMI 例子：由场值重建的 Z=E·H⁻¹ 与阻抗段
+    SI 值在长周期一致到 1e-6~1e-7；段头 [mV/km]/[nT] 是照抄阻抗段的
+    摆设）——换算为 E 直通、H×1/μ0 → A/m。raw 保留文件原单位。
+    E/H 比值直接决定合成阻抗（ρa∝|Z|²），任何标度错误都不会被渲染端
+    的自然幅值归一吸收——归一按极化列整体缩放。
+    注：场值段与阻抗段是 exe 的两条求值路径，粗网格最短周期（趋肤深度
+    ≪ 网格）可分叉 ~20%（COMMEMI 例 T=0.001 s 实测；长周期 1e-6 级）。
+    场值路径以场值段为准；需与阻抗严格一致时用纯阻抗文件。
 
 站位键：ModEM 以 (Code, X, Y) 唯一定站（COMMEMI 网格例中同一码位
 可复用于多坐标）——同码多坐标时测点名加序号后缀。
@@ -234,7 +239,9 @@ def sites_from_response(resp, to_si=True, conjugate='auto'):
                XMLSITE/EDI 同为 +45° 口径，默认直通）/ True / False。
                共轭 = 相位约定变换（e^{±iωt} 互逆）：所有场相位取反。
                to_si=False 保留文件原单位。
-    至少 2 个有效频点才成站（FingerprintMap 下限）。
+    转换路径逐站判定：该站有非零场值分量 → fields 路径（全零占位行跳过，
+    未回填/部分回填的站自动回退 impedance 路径）。至少 2 个有效频点才
+    成站（FingerprintMap 下限）。
     """
     from .model import Field, ForwardSite
     if conjugate == 'auto':
@@ -246,8 +253,11 @@ def sites_from_response(resp, to_si=True, conjugate='auto'):
     def cv(z):
         return complex(z.real, -z.imag) if conj else z
 
-    e_fac = 1e-6 if to_si else 1.0                    # mV/km -> V/m
-    h_fac = (1e-9 / MU0) if to_si else 1.0            # nT -> A/m
+    # 阻抗换算在 _impedance_rows 内完成（[mV/km]/[nT]→SI）。
+    # EM_Fields 实为 SI：E [V/m]、H 是 B [T] → H[A/m] ×1/μ0
+    # （E/H 比值不受影响，恰为该站阻抗）。
+    fe_fac = 1.0                                       # E 已是 V/m
+    fh_fac = (1.0 / MU0) if to_si else 1.0             # B[T] -> H[A/m]
 
     sites = []
     for key in resp.station_keys():
@@ -260,25 +270,35 @@ def sites_from_response(resp, to_si=True, conjugate='auto'):
         site.name = name
         site.x, site.y = lon, lat      # 与 jh_fp_modem 同口径：X=经度 Y=纬度
         built = 0
-        if resp.conversion_path == 'fields':
+        rows = resp.data.get(key, {})
+        st_fields = any(v != 0 for (p, c), v in rows.items() if c in _F_COMPS)
+        if st_fields:
             by_per = {}
-            for (per, comp), v in resp.data.get(key, {}).items():
+            for (per, comp), v in rows.items():
                 by_per.setdefault(per, {})[comp] = v
             for per in sorted(by_per):
                 d = by_per[per]
                 if not all(c in d for c in _F_COMPS):
                     continue
+                if all(d[c] == 0 for c in _F_COMPS):
+                    continue                     # 未回填的占位行
                 fv = {c: cv(d[c]) for c in _F_COMPS}
                 fld = Field(frequency=1.0 / per, is_noise=False)
-                fld.ex1, fld.ey1 = fv['EPOLEX'] * e_fac, fv['EPOLEY'] * e_fac
-                fld.hx1, fld.hy1 = fv['EPOLHX'] * h_fac, fv['EPOLHY'] * h_fac
-                fld.hz1 = fv['EPOLHZ'] * h_fac
-                fld.ex2, fld.ey2 = fv['BPOLEX'] * e_fac, fv['BPOLEY'] * e_fac
-                fld.hx2, fld.hy2 = fv['BPOLHX'] * h_fac, fv['BPOLHY'] * h_fac
-                fld.hz2 = fv['BPOLHZ'] * h_fac
+                fld.ex1 = fv['EPOLEX'] * fe_fac
+                fld.ey1 = fv['EPOLEY'] * fe_fac
+                fld.hx1, fld.hy1 = fv['EPOLHX'] * fh_fac, fv['EPOLHY'] * fh_fac
+                fld.hz1 = fv['EPOLHZ'] * fh_fac
+                fld.ex2 = fv['BPOLEX'] * fe_fac
+                fld.ey2 = fv['BPOLEY'] * fe_fac
+                fld.hx2, fld.hy2 = fv['BPOLHX'] * fh_fac, fv['BPOLHY'] * fh_fac
+                fld.hz2 = fv['BPOLHZ'] * fh_fac
                 site.fields.append(fld)
                 built += 1
-        else:
+        if built < 2:
+            built = 0
+            site = ForwardSite()
+            site.name = name
+            site.x, site.y = lon, lat
             for freq, Z, T in _impedance_rows(resp, key, to_si):
                 h1 = complex(1.0, 0.0), complex(0.0, 0.0)
                 h2 = complex(0.0, 0.0), complex(1.0, 0.0)
@@ -366,7 +386,9 @@ def add_em_fields(src, dst):
     elev_line = proto.get('elev_line', '>     0.00')
     origin_line = proto.get('origin_line', '>    0.000   0.000')
     per_set = sorted({r[0] for r in resp.record_order})
-    sta_set = {r[1] for r in resp.record_order}
+    # ModEM 的 n_sites 计站位 (code,x,y)——同码多坐标（网格复用码）时
+    # 唯一码数 ≠ 站位数，按站位数才与数据行一致
+    sta_n = len(resp.station_keys())
     lines = ['# synthts: EM_Fields placeholder (zeros; modified ModEM fills'
              ' after forward)',
              '# Period(s) Code GG_Lat GG_Lon X(m) Y(m) Z(m) Component Real Imag Error',
@@ -375,7 +397,7 @@ def add_em_fields(src, dst):
              '>  [mV/km]/[nT]',
              elev_line,
              origin_line,
-             '>%8d%6d' % (len(per_set), len(sta_set))]
+             '>%8d%6d' % (len(per_set), sta_n)]
     # 注意：改版 exe 按固定结构分段——每段恰好 2 行 '#' 注释 + 6 行 '>' 头
     # （实测：多出的注释行会被当成数据类型声明，报 Unknown data type）
     for per, code, x, y in resp.record_order:
@@ -388,7 +410,7 @@ def add_em_fields(src, dst):
     from pathlib import Path
     body = ''.join(ln + '\r\n' for ln in lines).encode('ascii')
     Path(dst).write_bytes(Path(src).read_bytes() + body)
-    return {'n_periods': len(per_set), 'n_stations': len(sta_set),
+    return {'n_periods': len(per_set), 'n_stations': sta_n,
             'n_records': len(resp.record_order),
             'n_rows': len(resp.record_order) * len(_EM_COMPS),
             'sections': [n for n, _, _ in resp.sections]}
