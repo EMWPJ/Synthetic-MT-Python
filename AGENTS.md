@@ -27,6 +27,14 @@ python tools/plot_demo.py           # MT paper figures  -> ./plot_out/
 python tools/plot_demo_amt.py       # AMT paper figures -> ./plot_out_amt/
 ```
 
+CLI modes (all in `synthts.cli`, mutually exclusive): `-model` synthesis ·
+`-modem-run MODEL DAT` one-shot ModEM→TS (needs `-modem-exe`; subsets via
+`-stations`/`-max-periods`; passthrough `-mode/-dur/-seed/...`) ·
+`-modem DAT` response→sites · `-modem-add-fields DAT` placeholder append ·
+`-edi` measured-EDI→sites (warning contract) · `-qc DIR` per-site ρa/φ
+report · `-info` / `-selftest` (install check: dual-engine micro synth +
+anchor re-estimate; exit 0 only on PASS).
+
 An accepted change requires: pytest green **and** `mt_e2e_demo --source both`
 ALL PASS. The demo output dirs (`mt_e2e_out_*`, `plot_out*`, `run48h/`) are
 git-ignored scratch.
@@ -47,9 +55,16 @@ synthts/
 ├── cts_dense.py      # dense CTS (syscal_dll-generated; tools/gen_dense_cts.py)
 ├── phoenix_ts.py     # TBL + TS binary writer (Phoenix byte format)
 ├── modem.py          # ModEM data/response → XMLSITE sites (multi-section:
-│                     #   Full_Impedance / RhoPhase / tipper / EM_Fields);
+│                     #   Full_Impedance / Rho_Phase / tipper / EM_Fields);
 │                     #   add_em_fields appends an EM_Fields placeholder
 │                     #   section for the modified exe's forward runs
+├── modem_run.py      # -modem-run orchestration: subset_dat (section-aware,
+│                     #   counts rewrite, raw-token preservation) + short
+│                     #   ASCII work dir for the exe + response picking
+├── edi.py            # -edi: SEG 1.0 EDI → XMLSITE site (self-contained;
+│                     #   NON-STANDARD flow — warning contract below)
+├── qc.py             # -qc: per-site ρa/φ theory-vs-synthetic report
+│                     #   (PNG optional via matplotlib + qc_summary.json)
 └── source_params.py  # noise presets + L4 schema validation
 ```
 
@@ -74,7 +89,17 @@ theory. Any render change usually needs the matching processing-side change.
   engine byte-for-byte. Intentional convention changes require regenerating the
   bucket and saying so in the commit message; nothing else may move it.
 - **JSON summary** is the last stdout line only, never in `-log`; file paths use
-  forward slashes.
+  forward slashes. `-selftest`/`-modem-run` spawn inner `main()` runs whose
+  summaries appear earlier — the LAST line is still the authoritative one
+  (selftest / final synthesis respectively).
+- **EDI warning contract**: `-edi` synthesizes from a *measured* impedance —
+  the "theory" is a replica of that site's field response, so it must never
+  be used as an unbiased ground truth for processing tests on that site
+  (circular reasoning). The CLI prints a mandatory warning banner and puts a
+  `warning` field in the summary JSON. Keep both when touching `_run_edi`.
+- **NaN model guard**: `cli.main` rejects models with non-finite field
+  components (forward outputs can emit NaN at unresolvable short periods);
+  the error lists the offending frequencies.
 - **Determinism**: same seed → byte-identical output. Never introduce per-run
   normalization or wall-clock-dependent values into the render path.
 - **Writers must reject `..` path traversal** (see `write_time_series`); keep it

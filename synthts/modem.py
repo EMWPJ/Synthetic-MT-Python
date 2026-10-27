@@ -81,6 +81,7 @@ class ModemResponse:
         self.record_order = []       # (per, code, x, y) 文件首现序（跨段去重）
         self.header_proto = {}       # 首段头行原型：exp/elev/origin（含 '>'）
         self.data = {}               # (code, x, y) -> {(period, comp): complex}
+        self.raw_row = {}            # (per, code, x, y) -> 前 7 列原始 token
         self.comps_present = set()   # 出现过的分量名（诊断用）
         self.fields_present = False  # 是否含 EPol*/BPol* 分量
         self.fields_nonzero = False  # 场值分量是否有非零（正演已回填）
@@ -211,6 +212,7 @@ def parse_modem_response(path):
             resp.comps_present.add(comp)
             resp.data.setdefault((code, x, y), {})[(per, comp)] = \
                 complex(re_, im_)
+            resp.raw_row.setdefault((per, code, x, y), t[:7])
             if comp in _F_COMPS:
                 resp.fields_present = True
                 if re_ != 0.0 or im_ != 0.0:
@@ -439,12 +441,20 @@ def add_em_fields(src, dst):
     # 注意：改版 exe 按固定结构分段——每段恰好 2 行 '#' 注释 + 6 行 '>' 头
     # （实测：多出的注释行会被当成数据类型声明，报 Unknown data type）
     for per, code, x, y in resp.record_order:
-        lat, lon, elev = resp.coords.get((code, x, y), (0.0, 0.0, 0.0))
+        # 周期/坐标 token 原文照抄：%.6E 重排会舍入全精度周期
+        # （如 7281.73013908105），与源行的浮点键错位产生幻影记录
+        tok = resp.raw_row.get((per, code, x, y))
+        if tok:
+            head_cols = '  '.join([tok[0], tok[1], tok[2], tok[3],
+                                   tok[4], tok[5], tok[6]])
+        else:
+            lat, lon, elev = resp.coords.get((code, x, y),
+                                             (0.0, 0.0, 0.0))
+            head_cols = '%.6E  %s  %.7f  %.7f  %.3f  %.3f  %.3f' % (
+                per, code, lat, lon, x, y, elev)
         for comp in _EM_COMPS:
-            lines.append(
-                '%.6E  %-8s  %.7f %.7f  %.3f %.3f %.3f  %-6s  '
-                '0.000000E+00  0.000000E+00  2.000000E+15'
-                % (per, code, lat, lon, x, y, elev, comp))
+            lines.append('%s  %-6s  0.000000E+00  0.000000E+00  '
+                         '2.000000E+15' % (head_cols, comp))
     from pathlib import Path
     body = ''.join(ln + '\r\n' for ln in lines).encode('ascii')
     src_bytes = Path(src).read_bytes()
