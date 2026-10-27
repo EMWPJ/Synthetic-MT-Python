@@ -146,7 +146,10 @@ def _run_modem(args, say, t0):
     sites = sites_from_response(resp, to_si=(args.modem_units == 'si'),
                                 conjugate=conj)
     if not sites:
-        raise ValueError('无有效测点（每站需 ≥2 个完整频点）')
+        comps = sorted(resp.comps_present)
+        raise ValueError('无有效测点（每站需 ≥2 个完整频点：全四分量'
+                         'ZXX..ZYY，或离对角 RHO*/PHS* 可重建，或已回填'
+                         ' EM_Fields；文件分量: %s）' % (comps[:12] or '无'))
     conj_used = (conj is True if conj != 'auto'
                  else bool(resp.sections)
                  and all(sgn == '-i' for _, _, sgn in resp.sections))

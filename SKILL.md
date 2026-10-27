@@ -125,6 +125,9 @@ python tools/par_report.py    # lines vs noise: Z / coherence / spectral / stats
 synthts -modem-add-fields datafile.dat -out datafile_fields.dat
 # 2) 改版 ModEM（EMWPJ exe）正演：
 #    ModEM.exe -F model datafile_fields.dat response.dat fields.E modempar
+#    ⚠ exe 的命令行缓冲装不下长中文路径（参数被截断→"No input model
+#      parametrization"）——模型/数据/输出先拷到短 ASCII 路径再跑
+#      （实测 ID005 江汉数据：中文路径必失败，ASCII 拷贝成功）
 # 3) 正演响应/场值 → 合成测点（逐站写 <站名>.XMLSITE）
 synthts -modem response.dat -out sites/
 # 4) 测点 → Phoenix 时序
@@ -141,14 +144,18 @@ already contain an EM_Fields section. Summary JSON gains
 `"action":"modem_add_fields"`. Step 3 accepts the resulting response file
 (see below).
 
-Parses ModEM data/response files with multiple `>` sections:
-`Full_Impedance` (ZXX/ZXY/ZYX/ZYY), `RhoPhase` (ρa/φ → Z rebuilt as
-`sqrt(ωμ0·ρa)·e^{iφ}`, already SI), `Full_Vertical_Components` (TX/TY
-tipper), and the modified-ModEM `EM_Fields` section (EPolEx..BPolHz —
-unit X/Y-polarization incident-field responses, zeros in the input file
-filled in by forward). When non-zero `EM_Fields` values are present they
-become the site fingerprint directly ("fields" path); otherwise sites are
-built as H1=(1,0)/H2=(0,1), E=Z·H, Hz=T·H ("impedance" path). Stations are
+Parses ModEM data/response files with multiple `>` sections (section
+names matched with spaces/underscores normalized — `Rho_Phase` and
+`Off_Diagonal_Rho_Phase` both parse): `Full_Impedance` (ZXX/ZXY/ZYX/ZYY
+complex), rho/phase sections (`RHOXY/PHSXY/RHOYX/PHSYX` single-value
+rows, ModEM's default inversion output; Z rebuilt as
+`sqrt(ωμ0·ρa)·e^{iφ}` in SI, missing diagonal filled with 0),
+`Full_Vertical_Components` (TX/TY tipper), and the modified-ModEM
+`EM_Fields` section (EPolEx..BPolHz — unit X/Y-polarization
+incident-field responses, zeros in the input file filled in by forward).
+When non-zero `EM_Fields` values are present they become the site
+fingerprint directly ("fields" path); otherwise sites are built as
+H1=(1,0)/H2=(0,1), E=Z·H, Hz=T·H ("impedance" path). Stations are
 keyed by (Code, X, Y) — grid surveys reusing one code get `_N` suffixes.
 Each station needs ≥2 complete periods. Summary JSON gains
 `"action":"modem2xmlsite"`. Defaults: SI units (impedance [mV/km]/[nT]

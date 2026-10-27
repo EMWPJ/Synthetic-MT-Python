@@ -84,26 +84,65 @@ def test_parse_multisection_impedance(tmp_path):
     assert f0.hz2 == pytest.approx(complex(0.3, 0.4))
 
 
-def test_rhophase_reconstruction(tmp_path):
-    """RhoPhase 段：Z = sqrt(ωμ0·ρa)·e^{iφ}（重建即 SI，不再换算）。"""
-    rho, ph = 100.0, 45.0
-    rows = '\n'.join(
-        '%.6E  S1  30.0 113.0  -1000.0 2000.0 0.000  %s  %.6E  %.6E  2.0E+15'
-        % (per, comp, rho, ph)
-        for per in (0.01, 0.02)
-        for comp in ('ZXX', 'ZXY', 'ZYX', 'ZYY'))
-    path = _write(tmp_path,
-                  _dat(imp_row=rows).replace('>  Full_Impedance',
-                                             '>  RhoPhase'))
-    r = parse_modem_response(path)
-    assert r.rhophase
+def _rp_rows(per, code, rho=100.0, ph=45.0):
+    """真实 ModEM Rho/Phase 行：10 列（…Component Value Error），离对角。
+
+    误差列取显著不同的值（ρ 行 5%、φ 行 1°）——若被误读为虚部，
+    重建相位会被打成 atan(5/100)≈2.9° 之类的垃圾，测试即失败。
+    """
+    lat, lon, x, y = 30.0, 113.0, -1000.0, 2000.0
+    out = []
+    for comp, v, err in (('RHOXY', rho, 5.0), ('PHSXY', ph, 1.0),
+                         ('RHOYX', rho * 0.9, 5.0), ('PHSYX', ph + 5.0, 1.0)):
+        out.append('%.6E  %s  %.7f %.7f  %.1f %.1f 0.000  %s  %.6E  %.6E'
+                   % (per, code, lat, lon, x, y, comp, v, err))
+    return '\n'.join(out)
+
+
+def _rp_dat(rows, name='>  Off_Diagonal_Rho_Phase'):
+    head = ['# test', '# Period(s) Code GG_Lat GG_Lon X(m) Y(m) Z(m) '
+            'Component Value Error']
+    return '\n'.join(head + [name, '>  exp(+i\\omega t)', '>  Ohm-m',
+                             '>     0.00', '>    30.012  113.941',
+                             '>       2     2', rows]) + '\n'
+
+
+def test_rhophase_real_format(tmp_path):
+    """真实 Rho/Phase 格式（ID003 _094.dat 实测）：RHO*/PHS* 独立分量行。"""
+    rows = '\n'.join([_rp_rows(1.0E-2, 'S1'), _rp_rows(2.0E-2, 'S1')])
+    r = parse_modem_response(_write(tmp_path, _rp_dat(rows), name='rp.dat'))
+    assert r.fmt_z == 'rhophase' and r.rhophase
     site = sites_from_response(r)[0]
     assert len(site.fields) == 2
-    z_expect = math.sqrt(2 * math.pi * 100.0 * MU0 * rho) * complex(
-        math.cos(math.radians(ph)), math.sin(math.radians(ph)))
-    assert site.fields[0].ex1 == pytest.approx(z_expect, rel=1e-12)
-    assert site.fields[1].ex1 == pytest.approx(
-        z_expect / math.sqrt(2.0), rel=1e-12)        # 周期翻倍 → ω 减半 → |Z|/√2
+    f0 = site.fields[0]
+    w = 2 * math.pi * 100.0                            # f = 1/T = 100 Hz
+    zxy = math.sqrt(w * MU0 * 100.0) * complex(
+        math.cos(math.radians(45.0)), math.sin(math.radians(45.0)))
+    zyx = math.sqrt(w * MU0 * 90.0) * complex(
+        math.cos(math.radians(50.0)), math.sin(math.radians(50.0)))
+    assert f0.ex1 == 0                                  # 对角缺省置 0
+    assert f0.ey2 == 0
+    assert f0.ex2 == pytest.approx(zxy, rel=1e-12)      # e2 = Z@(0,1) → Ex=Zxy
+    assert f0.ey1 == pytest.approx(zyx, rel=1e-12)      # e1 = Z@(1,0) → Ey=Zyx
+    assert site.fields[1].ex2 == pytest.approx(zxy / math.sqrt(2.0),
+                                               rel=1e-12)   # T 翻倍 → |Z|/√2
+
+
+def test_rhophase_spellings_and_error_column(tmp_path):
+    """Rho_Phase / RhoPhase 拼写都识别；误差列不被当虚部（相位按 PHS 行）。"""
+    rows = '\n'.join([_rp_rows(1.0E-2, 'S1'), _rp_rows(1.0E-1, 'S1')])
+    for i, nm in enumerate(('>  Rho_Phase', '>  RhoPhase')):
+        r = parse_modem_response(_write(tmp_path, _rp_dat(rows, nm),
+                                        name='s%d.dat' % i))
+        assert r.rhophase
+        s = sites_from_response(r)
+        assert s and len(s[0].fields) == 2
+        ph = math.degrees(math.atan2(s[0].fields[0].ex2.imag,
+                                     s[0].fields[0].ex2.real))
+        assert ph == pytest.approx(45.0, abs=1e-9)      # 相位来自 PHSXY 行
+        rel = abs(s[0].fields[0].ex2) / math.sqrt(
+            2 * math.pi * 100.0 * MU0 * 100.0)
+        assert rel == pytest.approx(1.0, rel=1e-12)     # 幅值来自 RHOXY 行
 
 
 def test_fields_path_and_units(tmp_path):
@@ -317,6 +356,37 @@ def test_add_em_fields_station_count_positions(tmp_path):
     lines = open(dst, 'rb').read().decode('ascii').splitlines()
     counts = lines[lines.index('>  EM_Fields') + 5].lstrip('>').split()
     assert counts == ['2', '2']                        # 2 周期 × 2 站位
+
+
+def test_add_em_fields_no_origin_line_keeps_six_headers(tmp_path):
+    """源段缺坐标原点行时，counts 行（纯整数对）不得被复刻为原点行——
+    补出的 EM_Fields 段头必须恰好 6 行 '>'（exe 固定结构）。"""
+    rows = '\n'.join([_imp_rows(1.0E-3, 'S1'), _imp_rows(1.0E-2, 'S1')])
+    text = '\n'.join(['# c1', '# c2',
+                      '>  Full_Impedance', '>  exp(i\\omega t)',
+                      '>  [mV/km]/[nT]', '>     0.00', '>       2     1',
+                      rows]) + '\n'
+    src = _write(tmp_path, text, name='noorigin.dat')
+    dst = str(tmp_path / 'noorigin_out.dat')
+    add_em_fields(src, dst)
+    lines = open(dst, 'rb').read().decode('ascii').splitlines()
+    i = lines.index('>  EM_Fields')
+    heads = [ln for ln in lines[i:i + 6]]
+    assert all(ln.startswith('>') for ln in heads)
+    assert not any(ln.split() == ['2', '1'] for ln in heads)  # counts 未复刻
+    assert lines[i + 6].split()[0] == '1.000000E-03'          # 紧接数据行
+
+
+def test_add_em_fields_src_without_trailing_newline(tmp_path):
+    """源文件末行无换行 → 自动补换行，注释不并入末条数据行。"""
+    rows = '\n'.join([_imp_rows(1.0E-3, 'S1'), _imp_rows(1.0E-2, 'S1')])
+    src = _write(tmp_path, _dat(imp_row=rows).rstrip('\n'), name='nonl.dat')
+    assert not open(src, 'rb').read().endswith(b'\n')
+    dst = str(tmp_path / 'nonl_out.dat')
+    add_em_fields(src, dst)
+    lines = open(dst, 'rb').read().decode('ascii').splitlines()
+    i = lines.index('>  EM_Fields')
+    assert lines[i + 6].split()[0] == '1.000000E-03'          # 段头后即数据
 
 
 def test_add_em_fields_refusals(tmp_path):

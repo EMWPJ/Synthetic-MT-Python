@@ -110,6 +110,17 @@ theory. Any render change usually needs the matching processing-side change.
   A third comment line is consumed as the data-type declaration (fails with
   `Unknown data type: Period(s) …`, truncated at a fixed width) — this is
   what broke the Jianghan prep before; `add_em_fields` emits exactly 2.
+- The modified-ModEM exe's command-line buffer cannot hold long non-ASCII
+  paths: arguments get truncated and the run dies with
+  `No input model parametrization` / `ModelParamToEdge not allocated`
+  (measured: ID005 Jianghan model under a Chinese path fails; an ASCII
+  copy of the same file runs). Copy model/data to short ASCII paths first.
+- ModEM rho/phase response sections are `Rho_Phase` /
+  `Off_Diagonal_Rho_Phase` with **separate single-value rows**
+  RHOXY/PHSXY/RHOYX/PHSYX (10 columns: `… Component Value Error`) — the
+  error column is NOT an imaginary part, and the diagonal Z elements are
+  absent (filled with 0). `synthts.modem` matches section names with
+  spaces/underscores normalized.
 - Odd/even record lengths: never infer n from the rfft length (`n ≡ 0 mod 4`
   is ambiguous) — pass n explicitly.
 

@@ -15,7 +15,11 @@ ModEM 数据/响应文件为逐行 ASCII，每个记录一行：
                                   在各站的响应，输入文件置 0、正演后回填，
                                   恰为 XMLSITE 的 10 复数场指纹
 
-`> RhoPhase` 段的阻抗分量为 ρa[Ωm]/φ[°]，按 |Z|=sqrt(ωμ0·ρa) 重建。
+`> RhoPhase` 段（真实拼写 Rho_Phase / Off_Diagonal_Rho_Phase，匹配时
+归一化空格与下划线）的阻抗为 RHOXX/PHSXX..RHOYY/PHSYX 独立分量行
+（每行单值 + 误差列，ModEM 默认仅离对角 RHOXY/PHSXY/RHOYX/PHSYX），
+按 |Z|=sqrt(ωμ0·ρa)·e^{iφ} 重建（已是 SI）；缺省对角置 0（离对角
+标准输出的既定实践，与 jh_fp_modem 转换一致）。
 
 测点构造（与 snrinv/edi.site_from_edi、tools/jianghan_modem_fp 同构）：
   有非零场值分量 → 直接取 10 复数（fields 路径）；
@@ -50,8 +54,19 @@ _T_COMPS = ('TZX', 'TZY', 'TX', 'TY')
 _F_COMPS = ('EPOLEX', 'EPOLEY', 'EPOLHX', 'EPOLHY', 'EPOLHZ',
             'BPOLEX', 'BPOLEY', 'BPOLHX', 'BPOLHY', 'BPOLHZ')
 
-# 段格式 → 阻抗分量的取值解释（rhophase=ρa/φ，其余为复数 re/im）
-_RHOPHASE_KEYS = ('rhophase', 'imp_phase')
+# 段名匹配按归一化（去空格/下划线）子串：接住 Full_Impedance / RhoPhase /
+# Rho_Phase / Off_Diagonal_Rho_Phase / Imp_Tipper / Full_Vertical_Components
+# / EM_Fields 等真实拼写（实测 ID003 集群响应为 Off_Diagonal_Rho_Phase）
+_SECTION_TYPES = (('fullimpedance', 'full_impedance'),
+                  ('rhophase', 'rhophase'),
+                  ('imptipper', 'imp_tipper'),
+                  ('impedancetipper', 'impedance_tipper'),
+                  ('fullverticalcomponents', 'full_vertical_components'),
+                  ('emfields', 'em_fields'),
+                  ('impedance', 'impedance'))
+
+# ρ/φ 独立分量行（单值 + 误差列）；对角元素缺省置 0（离对角标准输出）
+_RHO_PAIRS = ('XX', 'XY', 'YX', 'YY')
 
 
 class ModemResponse:
@@ -66,6 +81,7 @@ class ModemResponse:
         self.record_order = []       # (per, code, x, y) 文件首现序（跨段去重）
         self.header_proto = {}       # 首段头行原型：exp/elev/origin（含 '>'）
         self.data = {}               # (code, x, y) -> {(period, comp): complex}
+        self.comps_present = set()   # 出现过的分量名（诊断用）
         self.fields_present = False  # 是否含 EPol*/BPol* 分量
         self.fields_nonzero = False  # 场值分量是否有非零（正演已回填）
 
@@ -75,8 +91,8 @@ class ModemResponse:
 
     @property
     def rhophase(self):
-        return any(k in self.fmt_z.lower().replace(' ', '_')
-                   for k in _RHOPHASE_KEYS)
+        norm = self.fmt_z.lower().replace(' ', '').replace('_', '')
+        return 'rhophase' in norm
 
     @property
     def conversion_path(self):
@@ -123,12 +139,11 @@ def parse_modem_response(path):
                 continue
             if s.startswith('>'):
                 low = s.lower()
+                norm = low.replace(' ', '').replace('_', '')
                 name = ''
-                for key in ('full_impedance', 'rhophase', 'imp_tipper',
-                            'impedance_tipper', 'full_vertical_components',
-                            'em_fields', 'impedance'):
-                    if key in low.replace(' ', '_'):
-                        name = key
+                for key, canon in _SECTION_TYPES:
+                    if key in norm:
+                        name = canon
                         break
                 if name:
                     _flush()
@@ -153,10 +168,15 @@ def parse_modem_response(path):
                 elif len(t) == 2:
                     try:
                         float(t[0]), float(t[1])
-                        if len(resp.sections) == 0 and cur is not None:
+                        # 纯整数对（无小数点/指数）是周期数/站数行——
+                        # 不得误当坐标原点行复刻（会让补段头多出一行）
+                        is_counts = all('.' not in v and 'e' not in v.lower()
+                                        for v in t)
+                        if (not is_counts and len(resp.sections) == 0
+                                and cur is not None):
                             resp.header_proto.setdefault('origin_line', s)
                     except ValueError:
-                        pass          # 周期数/站数行（两个整数）
+                        pass
                 continue
             if cur is not None:
                 _flush()
@@ -173,7 +193,11 @@ def parse_modem_response(path):
                 y = float(t[5])
                 elev = float(t[6])
                 comp = t[7].upper()
-                re_, im_ = float(t[8]), float(t[9])
+                if comp.startswith(('RHO', 'PHS')):
+                    # ρ/φ 独立分量行：单值列 + 误差列（t[9] 不是虚部！）
+                    re_, im_ = float(t[8]), 0.0
+                else:
+                    re_, im_ = float(t[8]), float(t[9])
             except (ValueError, IndexError):
                 continue
             if per not in resp.periods:
@@ -184,6 +208,7 @@ def parse_modem_response(path):
             resp.coords[(code, x, y)] = (lat, lon, elev)
             if (per, code, x, y) not in resp.record_order:
                 resp.record_order.append((per, code, x, y))
+            resp.comps_present.add(comp)
             resp.data.setdefault((code, x, y), {})[(per, comp)] = \
                 complex(re_, im_)
             if comp in _F_COMPS:
@@ -204,16 +229,28 @@ def _impedance_rows(resp, key, to_si):
     out = []
     for per in sorted(by_per):
         d = by_per[per]
-        if not all(c in d for c in _Z_COMPS):
-            continue
         if resp.rhophase:
-            # ρa[Ωm]/φ[°] 重建的 Z 已是 SI（V/m per A/m），不再换算
+            # RHO*/PHS* 独立分量行 → Z = sqrt(ωμ0·ρa)·e^{iφ}（已是 SI）。
+            # 离对角齐备才有效；缺省对角置 0（ModEM 默认离对角输出的
+            # 既定实践，与 jh_fp_modem 转换一致）
+            if not all(('RHO' + ij) in d and ('PHS' + ij) in d
+                       for ij in ('XY', 'YX')):
+                continue
             w = 2.0 * math.pi / per
-            amp = [math.sqrt(w * MU0 * abs(d[c].real))
-                   * complex(math.cos(math.radians(d[c].imag)),
-                             math.sin(math.radians(d[c].imag)))
-                   for c in _Z_COMPS]
+
+            def z_el(ij):
+                rho_v = d.get('RHO' + ij)
+                ph_v = d.get('PHS' + ij)
+                if rho_v is None or ph_v is None or rho_v.real <= 0:
+                    return 0j               # 缺省（离对角文件的对角）置 0
+                return math.sqrt(w * MU0 * rho_v.real) * complex(
+                    math.cos(math.radians(ph_v.real)),
+                    math.sin(math.radians(ph_v.real)))
+
+            amp = [z_el(ij) for ij in _RHO_PAIRS]
         else:
+            if not all(c in d for c in _Z_COMPS):
+                continue
             amp = [d[c] for c in _Z_COMPS]
             if to_si:
                 amp = [a * (1e-6 / (1e-9 / MU0)) for a in amp]
@@ -367,7 +404,8 @@ def _safe_path(p, what):
 
 
 def add_em_fields(src, dst):
-    """常规 ModEM dat → 追加 EM_Fields 占位段的新 dat（源内容逐字节保留）。
+    """常规 ModEM dat → 追加 EM_Fields 占位段的新 dat（源内容逐字节保留，
+    仅当缺尾换行时补一个换行防注释并入数据行）。
 
     返回 dict(n_periods, n_stations, n_records, n_rows)。源文件已含
     EM_Fields 段、无数据行、或 src==dst 时拒绝。
@@ -409,7 +447,10 @@ def add_em_fields(src, dst):
                 % (per, code, lat, lon, x, y, elev, comp))
     from pathlib import Path
     body = ''.join(ln + '\r\n' for ln in lines).encode('ascii')
-    Path(dst).write_bytes(Path(src).read_bytes() + body)
+    src_bytes = Path(src).read_bytes()
+    if src_bytes and not src_bytes.endswith((b'\n', b'\r')):
+        src_bytes += b'\r\n'          # 源文件缺尾换行时补齐，防注释并入数据行
+    Path(dst).write_bytes(src_bytes + body)
     return {'n_periods': len(per_set), 'n_stations': sta_n,
             'n_records': len(resp.record_order),
             'n_rows': len(resp.record_order) * len(_EM_COMPS),
