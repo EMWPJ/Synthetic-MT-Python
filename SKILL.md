@@ -99,8 +99,14 @@ python tools/mt_e2e_demo.py --source both   # lines + noise engines, four gates 
 Checks anchor impedances, inter-site coherence, full dense-grid impedance and
 spectral continuity (lines: PSD-gap ratio; noise: slope-normalized continuity
 probes >0.8); exit 0 only if both engines pass all four gates. Noise-mode Z
-floors (median ~2e-2) reflect CTS nearest-neighbour steps × continuous spectra —
-a processing physics floor, not an engine defect (design §5.3).
+floors (median ~2e-2) reflect the dense-CTS discretized response × continuous
+spectra — a processing physics floor, not an engine defect (design §5.3).
+
+标定口径（2026-11-02 起）：渲染默认 smooth（稠密 CTS 解卷绕插值），与
+MTDataPro 原生 SysCal 平滑去标定及 mt-process-plot `--cal phoenix`
+（现默认）三方对齐——任意处理方案网格上 ρa 无阶梯残差（legacy nearest
+在非锚点网格曾致低频 ±10/15% 锯齿，见 AGENTS；旧渲染配 mt-process-plot
+须显式 `--cal cts`）。
 
 ### 4. Estimate impedance from synthesized data (Python)
 
@@ -211,7 +217,7 @@ the noise engine), compares ρa/φ against the model theory
 markers; matplotlib optional — degrades to text/JSON without it) plus
 `qc_summary.json` with per-site median/max errors. Median ρa deviations
 >10% print a reminder that the noise engine has a physical floor at low
-freqs (CTS nearest-neighbour × continuous spectra) — lengthen `-dur`.
+freqs (discretized CTS × continuous spectra) — lengthen `-dur`.
 Report tool: always exits 0 unless no models/TS are found.
 
 ### 9. 速查与自检
@@ -241,6 +247,13 @@ the summary JSON carries a `warning` field.
   AMT file is ~430 MB; keep `-dur` small for smoke runs.
 - `-dense 0` disables densification; with dense grids use `-periods >= 128`
   (lines engine only — inert for noise with a WARNING).
+- Author layered/curved 1-D models with DENSE anchor frequencies (~0.1
+  octave, e.g. 80 pts over 0.1–320 Hz): interpolated grid fields are
+  log-linear chords between anchors, so sparse anchors bend the embedded
+  Z away from the true response at the steepest curve sections (measured
+  ~+10 % ρa at 15 Hz with 8 anchors on an H-type model; half-spaces are
+  immune — straight line in log-log). No processing step or `-qc` can
+  detect or fix it; more anchors is the only cure.
 - Same `-seed` → byte-identical reruns (safe to assert file hashes in tests).
 - Calibration is built in (`synthts/assets/`); never pass TBL/CLB/CLC files.
 - `mtprocess.process` on the emitted `<site>_dense.XMLSITE` validates the full dense grid.

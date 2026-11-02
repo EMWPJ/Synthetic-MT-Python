@@ -6,9 +6,14 @@
   CTS_MT  — MT 处理网格 50 频点（band 3/4/5，SysCal_V7.exe 金标输出固化）
   CTS_AMT — AMT 处理网格 40 频点（band 2-5，syscal_dll 于同网格预计算）
 
-取值方式：按请求频率派生 band → 在对应 band 组内取最近网格点（不做插值——
-该盒 CLB 真值在网格间符号交替，插值会相消失真；模型频点取处理网格频率即精确
-命中）。band2 仅 AMT 表覆盖；band3-5 优先 MT 表（MT 合成主用），缺失回落 AMT 表。
+取值方式（2026-11-02 起默认 smooth）：符号解卷绕 + log-f 域复数线性插值于
+稠密 CTS 表（cts_dense，syscal_dll 于稠密网格预计算）——与 MTDataPro 原生
+SysCal 逆向库的平滑连续求值对齐：合成端烤进 counts 的响应与处理端除去的
+响应在任意方案网格上逐 bin 一致，阶梯残差消失（nearest 模式在非锚点方案
+网格上曾致低频 ρa ±10/15% 锯齿，见 AGENTS 陷阱清单）。band2 仅 AMT 表
+覆盖；band3-5 优先 MT 表（MT 合成主用），缺失回落 AMT 表。
+`SMOOTH_RESPONDS = False` 可回退 legacy nearest 模式（与主工程
+InterpolateCTSResponses 一致；仅用于复现旧行为，渲染/处理两侧须同切）。
 
 输出合同（与主工程一致）：responds[ch] = adcFactor * conj(z) / |z|^2，
 adcFactor = 1/2^23。
@@ -23,11 +28,10 @@ from .cts_mt import CTS_MT
 
 ADC_FACTOR = 1.0 / 8388608.0
 
-# 响应取值模式：'nearest'（默认，与主工程 InterpolateCTSResponses 一致）
-# 或 'smooth'（符号解卷绕 + log-f 域复数线性插值——稠密 CTS 实验证明底层
-# 响应平滑、表内"符号交替"仅为 z→−z 约定翻转；渲染与处理两侧须同用
-# 同一模式， staircase 的核内混合偏置即消失）。
-SMOOTH_RESPONDS = False
+# 响应取值模式：True（默认）= 稠密 CTS 解卷绕平滑插值，对齐 MTDataPro
+# 原生 SysCal 平滑去标定；False = legacy 50 点网格最近邻（仅复现旧行为）。
+# 渲染与处理两侧须同用同一模式。
+SMOOTH_RESPONDS = True
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
 
@@ -90,8 +94,14 @@ _SMOOTH_CACHE = {}
 def _dense_group(band):
     """band 组的稠密响应（cts_dense，已变换、已对齐、log10 f 升序）。
 
-    任一通道恰为 0 的行是 dll 出界点（如 Hx ~12kHz），丢弃——
-    否则网格边缘外 bin 的插值钳位到零行会得零响应。
+    两级行过滤（数据文件保持 dll 原始输出不动，过滤在载入时做）：
+    ① 任一通道恰为 0 的行是 dll 出界点（如 Hx ~12kHz），丢弃——否则网格
+       边缘外 bin 的插值钳位到零行会得零响应；
+    ② 局部离群行（任一通道模长偏离 ±2 邻行中位数 20 倍以上）是陷波中心/
+       边缘的退化求值（band3 46.2–50.05 Hz 七行、band5 0.3866 Hz 一行，
+       邻比 4e-23…5e+22）——log-f 线性插值的地雷，丢弃后跨缺口线性内插。
+       判据 20 倍安全：稠密网格步距 ~0.3%，真响应物理上不可能逐行跳 20 倍；
+       陷波的陡峭但平滑的行（邻比 0.4–2.5）保留。
     """
     if band not in _SMOOTH_CACHE:
         try:
@@ -99,6 +109,22 @@ def _dense_group(band):
             rows = sorted((r for r in DENSE_CTS
                            if r[1] == band and all(v != 0 for v in r[2])),
                           key=lambda x: x[0])
+            # ② 局部离群过滤（逐通道；两轮收敛——删行改变邻域）
+            n = len(rows)
+            if n >= 5:
+                mags = [[abs(v) for v in r[2][0::2]] for r in rows]  # 5 通道模长
+                drop = set()
+                for i in range(n):
+                    lo, hi = max(0, i - 2), min(n, i + 3)
+                    for c in range(5):
+                        nb = [mags[j][c] for j in range(lo, hi) if j != i]
+                        med = sorted(nb)[len(nb) // 2]
+                        if med > 0 and (mags[i][c] > 20.0 * med
+                                        or mags[i][c] < 0.05 * med):
+                            drop.add(i)
+                            break
+                if drop:
+                    rows = [r for i, r in enumerate(rows) if i not in drop]
         except Exception:
             rows = []
         if not rows:

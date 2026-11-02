@@ -246,23 +246,59 @@ def test_calibration_selftest(tmp_path):
     assert 'PASS' in r.stdout
 
 
+def _read_ts_records(path):
+    """按记录读 .TSn → (sr, [data_ch5_n_rec])（不跨记录拼接——smooth 响应
+    的逐记录 bin 增益为连续曲线，拼接网格 FFT 会把曲线混叠成伪随机增益，
+    破坏带内包络；渲染与真实处理均以记录为 FFT 单位，闸门同口径）。"""
+    raw = open(path, 'rb').read()
+    recs, sr, off = [], None, 0
+    while off + 32 <= len(raw):
+        head = raw[off:off + 32]
+        scans = int.from_bytes(head[10:12], 'little')
+        ch = head[12]
+        if not (0 < scans <= 100000 and 0 < ch <= 8):
+            break
+        nbytes = ch * scans * 3
+        body = raw[off + 32:off + 32 + nbytes]
+        if len(body) < nbytes:
+            break
+        b = np.frombuffer(body, dtype=np.uint8).reshape(-1, 3)
+        v = b[:, 0].astype(np.int32) | (b[:, 1].astype(np.int32) << 8) | (b[:, 2].astype(np.int32) << 16)
+        v = np.where(v >= (1 << 23), v - (1 << 24), v)
+        m = v.reshape(scans, ch).T.astype(float)
+        recs.append(m[:5] if ch >= 5 else np.vstack([m, np.zeros((5 - ch, scans))]))
+        sr = int.from_bytes(head[18:20], 'little')
+        off += 32 + nbytes
+    return sr, recs
+
+
 def _band_env(tsfile, f_b):
-    """带通±0.3oct + Hilbert 包络（calibrate_real 口径，直接读指定文件）。"""
-    import calibrate_real as cal
-    sr, data = mtprocess.read_ts(tsfile)
-    freqs = np.fft.rfftfreq(len(data[0]), 1.0 / sr)
-    with np.errstate(divide='ignore'):
-        lf = np.log2(np.maximum(freqs, 1e-300) / f_b)
-    mask = np.zeros_like(freqs)
-    mask[np.abs(lf) <= 0.3] = 1.0
-    tr = (np.abs(lf) > 0.3) & (np.abs(lf) < 0.45)
-    mask[tr] = 0.5 - 0.5 * np.cos(math.pi * (0.45 - np.abs(lf[tr])) / 0.15)
-    X = np.fft.rfft(data[2]) * mask
-    half = np.zeros(len(X) + 1, dtype=complex)
-    half[1:len(X)] = 2.0 * X[1:]
-    a = np.fft.ifft(half)[:len(data[0])]
+    """逐记录带通±0.3oct + Hilbert 包络，物理域口径（每记录自身 bin 网格
+    去仪器增益——与 render_fft.transfer_matrix 的逐记录求值同构）。
+
+    2026-11-02 起 smooth 响应为连续曲线：跨记录拼接网格上的 FFT 会把
+    逐记录增益曲线混叠成伪随机增益序列，稀释跨档包络相关度（nearest 的
+    平阶梯不受影响）——闸门改镜像渲染口径（物理域 + 记录对齐）后对两
+    模式均成立。"""
+    sr, recs = _read_ts_records(tsfile)
+    envs = []
+    for m in recs:
+        n = m.shape[1]
+        freqs = np.fft.rfftfreq(n, 1.0 / sr)
+        resp = np.asarray(calib.responds_on_grid(freqs)[2])  # Hx 逆响应
+        with np.errstate(divide='ignore'):
+            lf = np.log2(np.maximum(freqs, 1e-300) / f_b)
+        mask = np.zeros_like(freqs)
+        mask[np.abs(lf) <= 0.3] = 1.0
+        tr = (np.abs(lf) > 0.3) & (np.abs(lf) < 0.45)
+        mask[tr] = 0.5 - 0.5 * np.cos(math.pi * (0.45 - np.abs(lf[tr])) / 0.15)
+        X = np.fft.rfft(m[2]) * mask * resp
+        half = np.zeros(len(X) + 1, dtype=complex)
+        half[1:len(X)] = 2.0 * X[1:]
+        a = np.fft.ifft(half)[:n]
+        envs.append(np.abs(a))
     n = int(round(8.0 * sr / f_b))
-    return np.abs(a)[::n], sr
+    return np.concatenate(envs)[::n], sr
 
 
 def test_cross_schema_shared_envelopes(tmp_path):

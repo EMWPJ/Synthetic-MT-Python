@@ -601,9 +601,10 @@ def main(argv=None):
         n_bands_info = None
         events_dropped = 0
         if args.source == 'noise':
-            # v2 噪声源：按记录带合成（设计 §3 方案 (a′)）；标定以逐 bin 最近
-            # 邻折进 T（render_fft.transfer_matrix），不走 add_calibration——
-            # 与 mtprocess 处理端 compute_responds 的最近邻口径一致
+            # v2 噪声源：按记录带合成（设计 §3 方案 (a′)）；标定以逐 bin
+            # calib 响应折进 T（render_fft.transfer_matrix），不走
+            # add_calibration——与 mtprocess 处理端 compute_responds
+            # 同模式同口径（smooth/nearest 由 calib.SMOOTH_RESPONDS 统一）
             noise = NoiseSource(args.seed, src_params)
             plans = render_fft.plan_from_schemas(schemas, btime, etime)
             # 全局源结构一次抽签（段链/γ/事件跨档共享，v2.1）

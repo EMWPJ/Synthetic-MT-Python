@@ -116,13 +116,28 @@ theory. Any render change usually needs the matching processing-side change.
 - Quantization: rendered counts use a fixed deterministic gain
   (`COUNTS_SCALE = 256`) with a clip guard. Per-file peak normalization is
   forbidden (breaks cross-band/cross-seed consistency).
-- Dense CTS rows with an exactly-zero channel are syscal_dll out-of-range
-  evaluations (e.g. Hx ≈ 12 kHz) — `calib._dense_group` drops them;
-  `tools/gen_dense_cts.py` filters them at generation time.
-- `SMOOTH_RESPONDS` (calib module flag, default False) switches responds from
-  nearest-neighbour to dense-table interpolation. Render and process must run
-  in the same mode; demo scripts set it once at import, the shipped default
-  path keeps both sides False.
+- Dense CTS degenerate rows are dropped at load time in `calib._dense_group`
+  (data file stays raw dll output): ① exactly-zero channels = out-of-range
+  evals (e.g. Hx ≈ 12 kHz); ② **local outliers** (any channel ∣z∣ off the
+  ±2-row median by >20×) = notch-centre/edge degraded evals (band 3
+  46.2–50.05 Hz seven rows, band 5 0.3866 Hz one row — neighbour ratios
+  4e-23…5e+22). Unfiltered, the 50 Hz row (|z|≈6e11 after transform)
+  poisoned every interpolated query in 48.5–57.3 Hz and broke the PSD
+  gate. 20× is safe: dense spacing ≈0.3 %, true response cannot jump 20×
+  row-to-row; the steep-but-smooth notch rows (ratios 0.4–2.5) are kept.
+- `SMOOTH_RESPONDS` (calib module flag, **default True since 2026-11-02**)
+  selects dense-table unwrapped interpolation over the legacy 50-pt
+  nearest-neighbour. Rationale: the external processor of record
+  (MTDataPro) de-calibrates with the native SysCal engine — smooth,
+  continuous evaluation at plan frequencies. With nearest rendering, any
+  plan grid not exactly on the 50-pt anchors (e.g. the Octave4 100-pt
+  plan) leaves a staircase residual baked into the data: measured ρa
+  zigzag −9.7 %/+14.6 % (pp 24 %) across band 5, −37 % below the grid
+  edge. Smooth mode collapses this to ≤1.8 % (usable range f ≥ 5e-5 Hz).
+  Render and process must run in the same mode (both default True now);
+  set False only to reproduce legacy renders, on both sides at once.
+  Known edges: frequencies below a band's dense-table lower bound (band 5:
+  1.7166e-5 Hz — unobservable in ≤24 h records) clamp to the edge value.
 - MT phases are folded to (−90°, 90°] for display; a pure sign flip of Z is
   invisible after folding, a convention conjugation is not.
 - ModEM output phases are empirically the same +45°-style convention as
@@ -148,6 +163,20 @@ theory. Any render change usually needs the matching processing-side change.
   spaces/underscores normalized.
 - Odd/even record lengths: never infer n from the rfft length (`n ≡ 0 mod 4`
   is ambiguous) — pass n explicitly.
+- Fields between the model's anchor frequencies are log10(f)-linear
+  interpolations of each complex component (`model.resample_site_log`,
+  re/im separately) — piecewise chords, not the exact forward response.
+  For curving (layered 1-D) models with sparse anchors the embedded Z at
+  interpolated points deviates from the exact recursion where ρa curves
+  hardest (measured: H-type 100/10/1000 Ω·m, 8 anchors ≈ 1.68 octaves
+  apart → up to ~10 % |Z| bias near 15 Hz; a half-space is immune —
+  ρa ∝ f is a straight line in log-log). Processing cannot remove it
+  (AR prewhitening / longer windows / multitaper change nothing), and QC
+  `-qc` plus the e2e gates cannot flag it either — they compare against
+  the same interpolated theory. Rule: author curved models with dense
+  anchors (~0.1 octave, e.g. 80 pts over 0.1–320 Hz); measured ρa bias
+  vs exact z1d collapses from +9 % median / +20 % max to −0.1 % median /
+  4.5 % max (statistical, 24 h record).
 
 ## Output files (per site, in `-out`)
 

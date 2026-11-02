@@ -7,7 +7,7 @@
    X(f) = Σ w[n]·x[n]·e^{-2πi f n/fs}（等价于 MTDataPro 的逐频加窗 FFT 取目标频点）。
 2. 标定：合成时 AddCalibration 做了 E_adc = E/rE、H_adc = H/rH·μ0，
    此处精确相乘还原物理场（与主工程 FFT 校准"谱除系统响应"同一环节；
-   responds 用与合成相同的 calib.compute_responds，nearest-neighbour 完全一致）。
+   responds 用与合成相同的 calib.compute_responds（同模式同插值，逐点一致）。
 3. 阻抗估计（最小二乘）：对每个频率，把 N 个窗口的 (Hx,Hy) 作为输入矩阵、
    Ex/Ey 分别作为输出，解复数 LSQ  E = H·Z + ε，Z 行向量 = (H^H H)^{-1} H^H E。
    两个极化态在合成中带随机段幅相（等效随机源场），LSQ 跨窗口消去。
