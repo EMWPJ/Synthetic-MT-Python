@@ -159,3 +159,30 @@ median −0.94%、rms 2.22%、φ 0.16°）；SMOOTH 渲染数据在两侧对齐�
   或处理端约定，涉及真实数据极性证据，留待裁定。
 - 修复落点：mt-process-plot/scripts/mt_calib.py（phoenix 退化 bin 零化）；
   synthts 侧本轮无改动（路由/表修复经复验成立）。
+
+---
+
+## 8.2 对 §8.1 复测的核对（Windows，2026-11-03）
+
+- **判据 A 相位项系判据误用，非表缺陷**：判据式 |den·conj(nat)|=adcFactor
+  的相位 = −(θ_dense+θ_native)（conj 使两项相位相加），随响应相位自身
+  摆动——Windows 复算 conj 判据：band5 med −149°、band4 −22°、
+  band3 −4°、band2 +24°（范围 ±180°），即 Mac 所见"84–111° 随 band
+  变化"的同族数值。**正确判据无 conj：T·z 应 ≡ adcFactor（正实数）**，
+  复算相位 max ≤0.083°、|T·z|/adc 幅值差 max ≤1.7%（全 band）——
+  dense ≡ native 以正确判据成立。幅值项两法一致（0.002–0.8% ✓）。
+- **精确网格重建后 phoenix 在 Windows 干净**：按 Mac 网格（97 锚点
+  0.0005–320 Hz、5 点/倍频程、2^(1/5) 间隔）重建 mtl3、同 seed 42/
+  dur 86400/pure-l1/scale 10 合成、mtproc 默认 phoenix——ρa med
+  −0.44%/−0.03%/+0.28%/−1.48%（四频段），max 7.65%（仅 320 Hz 顶缘），
+  φ = 恒定 180°（§8 已记录的 E 符号口径）。与 Mac 的 −54%/+87%/+146%/
+  +378% 不可调和 → **剩余分歧在 fixture/平台层**，代码与锚点网格已排除。
+  请求 Mac 侧推送 mtl3_v2.XMLSITE + 实际写出的 MTL.TBL + phoenix CSV 至
+  NAS demo 目录直接对拍（候选差异：TBL 注入字段的 native 依赖、
+  numpy 2.4.6 vs 2.4.2、arm64/x86 libm ULP 经阈值比较放大）。
+- **B 场景结论与 §8 一致**：cts 在 SMOOTH 渲染数据上全频段正确
+  （φ med 0.25° 无翻转）——这正是 §8 的配对建议（cts 的负号与 synthts
+  写盘负号成对）；Mac 侧"E 符号口径判断修正"实为对 §8 的确认。
+- **现行操作口径不变**：synthts 数据 → `--cal cts`；phoenix 面向真
+  Phoenix 数据（其 synthts-数据符号问题已由 70e8207 振铃修复解决幅值，
+  符号差留待真实数据极性证据裁定）。
