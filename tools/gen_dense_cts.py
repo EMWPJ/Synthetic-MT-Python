@@ -1,144 +1,166 @@
 # -*- coding: utf-8 -*-
-"""用 syscal_dll 生成稠密 CTS 表 → synthts/cts_dense.py。
+"""用 syscal_native（净室逆向纯 Python 引擎，≡原 exe 443 机队位级）
+生成稠密 CTS 表 → synthts/cts_dense.py。
 
-网格 = 12 点/倍频程对数底网格（1e-4~12000 Hz）
-     + 50Hz 工频陷波邻域线性加密（45-55Hz @0.1Hz，49-51Hz @0.05Hz）
-     + 稀疏表全部锚点频率。
+2026-11-03 重写（替代 dll+逐 band 对齐版）：
+  - 引擎 = mt-calibration/scripts/syscal_native（与 mtproc phoenix/MTDataPro
+    原生链同源）——稠密表与处理端**结构上一致**，旧版"逐 band 复数中位
+    比例对齐到稀疏表"的 hack 废除（该对齐正是稠密表 vs native 系统性
+    偏差的来源，见 docs/parity_mtproc_phoenix_a0caf41.md）。
+  - 网格 = 每 band 全计划覆盖（渲染 bin 可出现在 TS_SPEC 全范围，按文件
+    采样率路由后各 band 须覆盖其文件的全部计划频率）：
+      band2  9-12500 Hz（TS2 10-12000）
+      band3  0.9-1250 Hz（TS3 1-1200）
+      band4  0.009-80 Hz（TS4 0.1-75；AMT 连续 TS4 到 0.01）
+      band5  1.4e-5-7.7 Hz（TS5 到 7.5 = 15 Hz 链 Nyquist）
+    底网格 48 点/倍频程 + 自适应加密（相邻锚点相位步 >10° 或幅值比
+    离 1 超 5% 时二分，8 轮——解析带缘 knee 与通道零点）+ 50 Hz 工频
+    陷波邻域加密 + 稀疏表全部锚点频率。
+  - 值 = 引擎原始 z（处处连续平滑；运行时插值后再 transform 为
+    responds——T=adc·conj(z)/|z|^2 在 z 零/极点处符号歧义，插值须在
+    z 空间做）；生成端不做
+    退化行剔除——运行时 calib._dense_group 的 zero/20x 局部离群过滤
+    兜底（数据文件保持引擎原始输出）。
 
-对齐：逐 band 组求 dll/稀疏表 的复数中位比例（dll 与 SysCal_V7 的
-相位参考不同、幅度一致 ~0.3%）并施加到该组全部网格点；组内锚点处
-比例散度作为一致性校验打印（50Hz 陷波邻域的锚点会偏离——稀疏表在
-那里欠采样了陷波，正是本工具要修复的问题）。
+用法（仓库根）：python tools/gen_dense_cts.py
 """
-import ctypes
-import io
 import math
 import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+_SUBTREE_ROOT = os.path.dirname(_TOOLS_DIR)
+# 布局候选：mt-skills（subtree 内，引擎在兄弟 skill）｜上游（引擎经环境变量）
+_CANDS = [
+    os.path.join(os.path.dirname(_SUBTREE_ROOT), 'mt-calibration', 'scripts'),
+    os.environ.get('SYNTHTS_SYSCAL_NATIVE') or '',
+]
+_ENGINE_DIR = next((c for c in _CANDS
+                    if c and os.path.isfile(os.path.join(c, 'syscal_native.py'))),
+                   '')
+if not _ENGINE_DIR:
+    raise SystemExit('syscal_native 引擎未找到（设 SYNTHTS_SYSCAL_NATIVE=引擎目录）；'
+                     '试过: %s' % '; '.join(c for c in _CANDS if c))
+_ASSETS_DIR = os.path.join(_SUBTREE_ROOT, 'synthts', 'assets')
+_OUT_PATH = os.path.join(_SUBTREE_ROOT, 'synthts', 'cts_dense.py')
+if not os.path.isdir(_ASSETS_DIR):
+    raise SystemExit('资产目录未找到: %s' % _ASSETS_DIR)
+
+sys.path.insert(0, _TOOLS_DIR)
+sys.path.insert(0, _ENGINE_DIR)
 from synthts import calib                                       # noqa: E402
+import syscal_native as sn                                      # noqa: E402
 
-DLLP = os.environ.get('SYNTHTS_SYSCAL_DLL',
-                      'D:/D104/MTDataPro/SynthTSCLI/syscal_dll.dll')
-FX = os.environ.get('SYNTHTS_SYSCAL_FIXTURE',
-                    'D:/D104/MTDataPro/tmp/synthdemo')
-
-
-def band_of(f):
-    return 2 if f > 400 else 3 if f > 8 else 4 if f > 0.8 else 5
+# 每 band 全计划覆盖（渲染按文件采样率路由，见 calib.band_of_sr）
+_RANGES = {2: (9.0, 11000.0), 3: (0.9, 1250.0),  # band2 上缘 11.3k+ 出 0x4CD 括号
+           4: (0.009, 80.0), 5: (1.4e-5, 7.7)}
 
 
-def build_grid():
+def _eval_channel(sess, band, f):
+    rws, ff = sess.evaluate([(float(f), band)])
+    assert ff == 0
+    _f, _b, rc, rec = rws[0]
+    if rc != 0:
+        return None
+    return [calib.transform_cts(z) for z in rec]
+
+
+def build_grid(sess, band):
+    """底网格 48 点/倍频程 + 自适应加密。
+
+    自适应判据（相邻锚点，逐通道）：相位步 >20° 或 log 幅值步离 0 超
+    10% → 插中点；6 轮。解析带缘 knee（如 band4 6-11 Hz）与通道零点
+    （相位狂转区）在 12/oct 下插值误差达 5-50%，加密后收敛。"""
+    lo, hi = _RANGES[band]
     g = []
-    f = 1e-4
-    while f < 12000.0:                    # 12 点/倍频程
+    f = lo
+    while f < hi:                       # 48 点/倍频程
         g.append(f)
-        f *= 2 ** (1 / 12.0)
-    g.extend(np.arange(44.0, 56.01, 0.1))     # 50Hz 陷波邻域
-    g.extend(np.arange(48.5, 51.51, 0.05))
-    g.extend(calib_anchors())                 # 稀疏表锚点
-    return sorted(set(round(float(x), 10) for x in g))
+        f *= 2 ** (1 / 48.0)
+    g.append(hi)
+    if band in (3, 4):                  # 50 Hz 工频陷波邻域加密
+        g.extend(np.arange(44.0, 56.01, 0.2))
+        g.extend(np.arange(49.0, 51.01, 0.05))
+    g.extend(fq for fq, b, _ in (calib.CTS_MT + calib.CTS_AMT) if b == band)
+    g = sorted({float(x) for x in g if lo * 0.99 <= x <= hi * 1.01})
 
-
-def calib_anchors():
-    fs = set()
-    for tbl in (calib._MT, calib._AMT):
-        for _band, rows_ in tbl.items():
-            for f, _z5 in rows_:
-                fs.add(f)
-    return sorted(fs)
-
-
-def eval_dll(freqs):
-    dll = ctypes.WinDLL(DLLP)
-    dll.syscal_native_load.restype = ctypes.c_void_p
-    dll.syscal_native_load.argtypes = [ctypes.c_char_p] * 3 + [ctypes.POINTER(ctypes.c_int)]
-    dll.syscal_native_eval.restype = ctypes.c_int
-    dll.syscal_native_eval.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double),
-                                       ctypes.POINTER(ctypes.c_int), ctypes.c_int,
-                                       ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
-    err = ctypes.c_int(0)
-    paths = [os.path.join(FX, nm).encode('mbcs')
-             for nm in ('MT2-041A.TBL', '4360.CLB', 'BMT50000.CLC')]
-    h = dll.syscal_native_load(*paths, ctypes.byref(err))
-    assert h, 'syscal_native_load failed: %#x' % err.value
-    n = len(freqs)
-    co = (ctypes.c_double * (n * 10))()
-    cc = (ctypes.c_int * n)()
-    farr = (ctypes.c_double * n)(*freqs)
-    barr = (ctypes.c_int * n)(*[band_of(x) for x in freqs])
-    rc = dll.syscal_native_eval(h, farr, barr, n, co, cc)
-    assert rc == 0, 'syscal_native_eval rc=%d' % rc
-    arr = np.array(co).reshape(n, 5, 2)
-    return [arr[:, c, 0] + 1j * arr[:, c, 1] for c in range(5)]
+    vals = {f: _eval_channel(sess, band, f) for f in g}
+    g = [f for f in g if vals[f] is not None]
+    for _round in range(8):
+        inserts = []
+        for a, b in zip(g, g[1:]):
+            for c in range(5):
+                za = vals[a][c]
+                zb = vals[b][c]
+                ra, rb = abs(za), abs(zb)
+                if ra < 1e-300 or rb < 1e-300:
+                    inserts.append(0.5 * (a + b))
+                    break
+                dph = abs(math.atan2(zb.imag, zb.real)
+                          - math.atan2(za.imag, za.real))
+                dph = math.degrees(min(dph, 2 * math.pi - dph))
+                dlog = abs(math.log10(rb / ra))
+                if dph > 10.0 or dlog > 0.02:    # 5% 幅值比 / 10° 相位
+                    inserts.append(0.5 * (a + b))
+                    break
+        if not inserts:
+            break
+        for m in inserts:
+            if m not in vals:
+                vals[m] = _eval_channel(sess, band, m)
+        g = sorted(f for f in vals if vals[f] is not None)
+    print('  band%d 自适应后 %d 点（%d 轮加密）' % (band, len(g), _round + 1))
+    return g
 
 
 def main():
-    grid = build_grid()
-    print('网格点数: %d (1e-4 ~ 12000 Hz)' % len(grid))
-    raw = eval_dll(grid)
-    # 变换到标定口径（counts/场单位），50Hz 零点以 |t|<=1e12 封顶
-    ch = []
-    for c in range(5):
-        t = np.array([calib.transform_cts(v) for v in raw[c]])
-        t = np.where(np.abs(t) > 1e12, 1e12 * t / np.maximum(np.abs(t), 1e-300), t)
-        ch.append(t)
-    # dll 出界点任一通道返回精确 0（如 Hx 在 ~12kHz 线圈出界）——剔除，
-    # 否则网格边缘之外的 bin 插值钳位到零行 → 响应为 0 → 渲染 NaN
-    valid = np.ones(len(grid), dtype=bool)
-    for c in range(5):
-        valid &= np.abs(ch[c]) > 0
-    dropped = [f for f, v in zip(grid, valid) if not v]
-    if dropped:
-        print('剔除 dll 出界零点: %s' % ['%.6g' % x for x in dropped])
-    grid = [f for f, v in zip(grid, valid) if v]
-    ch = [c[valid] for c in ch]
-    garr = np.array(grid)
+    sess = sn.NativeSession()
+    code = sess.load(os.path.join(_ASSETS_DIR, 'DEFAULT.TBL'),
+                     os.path.join(_ASSETS_DIR, '4360.CLB'),
+                     os.path.join(_ASSETS_DIR, 'BMT50000.CLC'))
+    assert code == 0, 'native load err=0x%X' % code
+    assert sess.channel_count() == 5
 
-    # 对齐：按 band 组求 dll/稀疏 的复数中位比例并施加到该组全部网格点
+    rows = []
     for band in (2, 3, 4, 5):
-        rows_s = {f: z5 for tbl in (calib._MT, calib._AMT)
-                  for b, rr in tbl.items() if b == band
-                  for f, z5 in rr}
-        if not rows_s:
-            continue
-        sel_f = sorted(rows_s)
-        for c in range(5):
-            rr = []
-            for f in sel_f:
-                j = int(np.argmin(np.abs(garr - f)))
-                zs_t = calib.transform_cts(rows_s[f][c])
-                if abs(zs_t) > 0:
-                    rr.append(ch[c][j] / zs_t)
-            rra = np.array(rr)
-            med = complex(float(np.median(rra.real)), float(np.median(rra.imag)))
-            dev = float(np.abs(rra / med - 1).max())
-            grp = (garr >= min(sel_f) * 0.98) & (garr <= max(sel_f) * 1.02)
-            ch[c][grp] *= med
-            if c in (0, 2, 4):
-                print('  band%d ch%d: 比例 |med|=%.3e∠%.1f°  锚点散度 max=%.2f%%'
-                      % (band, c, abs(med), math.degrees(np.angle(med)), 100 * dev))
+        grid = build_grid(sess, band)
+        n_ok = 0
+        for i in range(0, len(grid), 400):
+            rws, ff = sess.evaluate([(f, band) for f in grid[i:i + 400]])
+            assert ff == 0
+            for f, _b, rc, rec in rws:
+                if rc != 0:
+                    print('  band%d f=%g 求值失败 rc=0x%X（跳过）'
+                          % (band, f, rc))
+                    continue
+                # 存原始 z（引擎输出，处处连续——含极点/零点处无符号
+                # 歧义）；responds 语义由运行时插值后 transform_cts 施加
+                vals = []
+                for z in rec:
+                    vals.extend((z.real, z.imag))
+                rows.append((f, band, vals))
+                n_ok += 1
+        print('band%d: %d/%d 点（%g-%g Hz）'
+              % (band, n_ok, len(grid), grid[0], grid[-1]))
 
-    buf = io.StringIO()
-    buf.write('# -*- coding: utf-8 -*-\n')
-    buf.write('"""稠密 CTS 表（syscal_dll 生成，工具 tools/gen_dense_cts.py）。\n\n')
-    buf.write('12 点/倍频程 + 50Hz 陷波邻域加密；已按稀疏表对齐相位参考。\n')
-    buf.write('行 = (频率 Hz, band, [Ex.re Ex.im Ey.re Ey.im ... Hz.re Hz.im])\n')
-    buf.write('"""\n')
-    buf.write('\nDENSE_CTS = [\n')
-    for i, f in enumerate(grid):
-        b = band_of(f)
-        z5 = [ch[c][i] for c in range(5)]
-        flat = ', '.join('complex(%r, %r)' % (float(v.real), float(v.imag))
-                         for z in z5 for v in (z.real, z.imag))
-        buf.write('    (%r, %d, [%s]),\n' % (f, b, flat))
-    buf.write(']\n')
-    with io.open(os.path.join('synthts', 'cts_dense.py'), 'w', encoding='utf-8') as fh:
-        fh.write(buf.getvalue())
-    print('written synthts/cts_dense.py (%d rows)' % len(grid))
+    with open(_OUT_PATH, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write('# -*- coding: utf-8 -*-\n')
+        fh.write('"""稠密 CTS 表（tools/gen_dense_cts.py 生成——syscal_native\n')
+        fh.write('直接求值，responds 语义 adcFactor*conj(z)/|z|^2，勿手改）。\n')
+        fh.write('\n')
+        fh.write('行 = (freq_hz, band, [re, im] x 5 通道 Ex,Ey,Hx,Hy,Hz)；\n')
+        fh.write('每 band 全计划覆盖（渲染按文件采样率路由，见 calib.band_of_sr）：\n')
+        fh.write('band2 9-12500 / band3 0.9-1250 / band4 0.009-80 /\n')
+        fh.write('band5 1.4e-5-7.7 Hz；12 点/倍频程 + 50 Hz 陷波加密 + 稀疏锚点。\n')
+        fh.write('"""\n')
+        fh.write('DENSE_CTS = [\n')
+        for f, band, vals in rows:
+            cells = ', '.join(repr(v) for v in vals)
+            fh.write('    (%r, %d, [%s]),\n' % (f, band, cells))
+        fh.write(']\n')
+    print('written', os.path.normpath(_OUT_PATH), 'rows=%d' % len(rows))
 
 
 if __name__ == '__main__':

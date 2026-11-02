@@ -67,6 +67,7 @@ def band_envelope(ts_dir, site, f_b):
         raise SystemExit('no TS band covers %.4g Hz' % f_b)
     fname = picked[0]
     sr, recs = _read_ts_records(fname)
+    band = calib.band_of_sr(sr)                  # 文件采样率路由
     n = int(round(WINDOW_PERIODS * sr / f_b))
     if n < 8:
         raise SystemExit('window too short at %.4g Hz' % f_b)
@@ -74,7 +75,7 @@ def band_envelope(ts_dir, site, f_b):
     for m in recs:
         nn = m.shape[1]
         freqs = np.fft.rfftfreq(nn, 1.0 / sr)
-        resp = {c: np.asarray(calib.responds_on_grid(freqs)[c])
+        resp = {c: np.asarray(calib.responds_on_grid(freqs, band=band)[c])
                 for c in (2, 3)}
         with np.errstate(divide='ignore'):
             lf = np.log2(np.maximum(freqs, 1e-300) / f_b)

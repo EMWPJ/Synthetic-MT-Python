@@ -168,7 +168,8 @@ def estimate_impedance_at(freq, ts_dir, site_name, bypass_screen=False):
 
     # 标定：合成链 E_adc = E/rE、H_adc = H/rH·μ0 的精确逆
     # 电道取负：文件电道按 e^{-iωt} 口径写盘（见 phoenix_ts._pack_body），此处对称翻回
-    r = calib.compute_responds([freq])
+    # band 按文件采样率路由（与渲染端 transfer_matrix 同合同，铁律勿按频率路由）
+    r = calib.compute_responds([freq], band=calib.band_of_sr(fs))
     fe = -xe * r[0][0]
     fy = -xy * r[1][0]
     fhx = xhx * r[2][0] / MU0
@@ -359,7 +360,9 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
             v.append(getattr(row, name) * (se if k == 0 else sb))
         scaled[name] = np.asarray(v)
     lf = np.log10(np.asarray(af, dtype=float))
-    r = calib.responds_on_grid(freqs)
+    # band 按文件（band=TS 名）采样率路由（与渲染端同合同）
+    r = calib.responds_on_grid(
+        freqs, band=calib.band_of_sr(TS_SPEC[band][2]))
     lgb = np.log10(np.maximum(freqs, 1e-300))
 
     def field_at(name):

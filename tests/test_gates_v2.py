@@ -281,11 +281,12 @@ def _band_env(tsfile, f_b):
     平阶梯不受影响）——闸门改镜像渲染口径（物理域 + 记录对齐）后对两
     模式均成立。"""
     sr, recs = _read_ts_records(tsfile)
+    band = calib.band_of_sr(sr)                          # 文件采样率路由
     envs = []
     for m in recs:
         n = m.shape[1]
         freqs = np.fft.rfftfreq(n, 1.0 / sr)
-        resp = np.asarray(calib.responds_on_grid(freqs)[2])  # Hx 逆响应
+        resp = np.asarray(calib.responds_on_grid(freqs, band=band)[2])
         with np.errstate(divide='ignore'):
             lf = np.log2(np.maximum(freqs, 1e-300) / f_b)
         mask = np.zeros_like(freqs)

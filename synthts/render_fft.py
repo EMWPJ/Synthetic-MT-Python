@@ -63,15 +63,18 @@ def interp_log_complex(anchor_freqs, values, freq_bins):
     return re + 1j * im
 
 
-def transfer_matrix(site, freq_bins, scale=1.0):
+def transfer_matrix(site, freq_bins, scale=1.0, band=None):
     """装配 T[c, p]（complex128，(5, 2, n_bins)）。
 
     site 为已 nature 归一、未标定的原始场（noise 路径不走 add_calibration：
-    标定以逐 bin 最近邻 responds 施加，保持与 mtprocess 处理端一致）。
+    标定以逐 bin responds 施加，保持与 mtprocess 处理端一致）。
+    band=文件采样率路由的 SysCal 频段（calib.band_of_sr；铁律：同一频率
+    在不同档经不同滤波链路——None 退回按频率值路由仅配 2026-11-02 前
+    旧渲染）。调用方传 record 采样率派生的 band。
     """
     fehs = site.get_feh(noise=False)
     anchors, cols = fehs[0], fehs[1:]           # cols: ex1..hz1, ex2..hz2
-    resp = calib.responds_on_grid(freq_bins)    # [5][n_bins]
+    resp = calib.responds_on_grid(freq_bins, band=band)    # [5][n_bins]
     bins = np.asarray(freq_bins, dtype=float)
     T = np.empty((5, 2, len(bins)), dtype=np.complex128)
     for c in range(5):
@@ -125,7 +128,8 @@ def synthesize_noise(site_list, schema, plan, rng, alpha1=1.0):
     assert all(r.n_samples == n0 for r in plan.records), \
         'RecordPlan 等长假设不成立（变长记录走 M4 逐记录装配路径）'
     freqs = np.fft.rfftfreq(n0, d=1.0 / plan.records[0].sample_rate)
-    Ts = [transfer_matrix(s, freqs) for s in site_list]
+    band = calib.band_of_sr(plan.records[0].sample_rate)   # 文件采样率路由
+    Ts = [transfer_matrix(s, freqs, band=band) for s in site_list]
     outs = [np.empty((5, n0 * len(plan.records)), dtype=np.float32)
             for _ in site_list]
     offs = np.arange(len(plan.records) + 1) * n0

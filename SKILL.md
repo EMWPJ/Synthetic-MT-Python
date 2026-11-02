@@ -102,11 +102,13 @@ probes >0.8); exit 0 only if both engines pass all four gates. Noise-mode Z
 floors (median ~2e-2) reflect the dense-CTS discretized response × continuous
 spectra — a processing physics floor, not an engine defect (design §5.3).
 
-标定口径（2026-11-02 起）：渲染默认 smooth（稠密 CTS 解卷绕插值），与
-MTDataPro 原生 SysCal 平滑去标定及 mt-process-plot `--cal phoenix`
-（现默认）三方对齐——任意处理方案网格上 ρa 无阶梯残差（legacy nearest
-在非锚点网格曾致低频 ±10/15% 锯齿，见 AGENTS；旧渲染配 mt-process-plot
-须显式 `--cal cts`）。
+标定口径（2026-11-03 起）：渲染默认 smooth（稠密 CTS z 空间插值，
+全计划覆盖 + 自适应加密，dense ≡ native 至 1.7%/0.1°），band 按**文件
+采样率**路由（band_of_sr，与 MTDataPro/mtproc 同合同；按频率路由曾致
+TS5 0.8–7.5 Hz 烤错频段、ρa −93%/+859%，见 docs/parity_*.md §7）。
+synthts 数据经 mt-process-plot 处理用 `--cal cts`（写盘口径成对）；
+`--cal phoenix` 面向真 Phoenix 数据（E 符号口径不同）。旧 nearest
+渲染为 legacy 配对（两侧同切 SMOOTH_RESPONDS=False）。
 
 ### 4. Estimate impedance from synthesized data (Python)
 

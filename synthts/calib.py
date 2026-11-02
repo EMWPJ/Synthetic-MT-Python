@@ -37,7 +37,15 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
 
 
 def band_of_freq(f: float) -> int:
-    """SyntheticBandOfFreq: >400→2, >8→3, >0.8→4, else 5。"""
+    """[legacy] 按频率值派生 band（>400→2, >8→3, >0.8→4, else 5）。
+
+    2026-11-03 起渲染/处理一律按**文件采样率**路由（band_of_sr，与
+    MTDataPro GetFreBands/mtproc phoenix/mt_calib.band_of_sr 同合同——
+    同一频率在不同档经不同滤波链路，按频率路由曾致 TS5 的 0.8–7.5 Hz
+    bins 烤入 band4 响应而处理端按 band5 去标定，7 Hz 处差 70×，见
+    docs/parity_mtproc_phoenix_a0caf41.md）。本函数仅存留给 cts 快照
+    legacy 口径与测试对照。
+    """
     if f > 400:
         return 2
     if f > 8:
@@ -45,6 +53,16 @@ def band_of_freq(f: float) -> int:
     if f > 0.8:
         return 4
     return 5
+
+
+# 数据档采样率 → SysCal 频段（与 mt_calib.band_of_sr / MTDataPro
+# GetFreBands 同合同；band=1 兜底非标采样率）。
+BAND_OF_SR = {24000: 2, 2400: 3, 150: 4, 15: 5}
+
+
+def band_of_sr(sr: float) -> int:
+    """采样率 → SysCal 频段（铁律：band 由数据档采样率决定，勿按频率路由）。"""
+    return BAND_OF_SR.get(int(round(float(sr))), 1)
 
 
 def _parse(table):
@@ -79,12 +97,19 @@ def _nearest(group, f):
 
 
 def _unwrap_group(rows):
-    """组内相位解卷绕：逐行翻转让相邻行相关为正（z→−z 约定翻转还原）。"""
+    """组内相位解卷绕：逐行翻转让相邻行相关为正（z→−z 约定翻转/±180°
+    相位卷绕还原）。
+
+    死区：相邻相关近正交（|dot| < 0.3·|a||b|，真零点两侧 T→0 符号本来
+    就翻转）不翻——否则把真零点穿越错翻成同号，零点附近插值即错。"""
     out = [rows[0]]
     for z in rows[1:]:
         prev = out[-1]
-        zc = z if (z.real * prev.real + z.imag * prev.imag) >= 0 else -z
-        out.append(zc)
+        dot = z.real * prev.real + z.imag * prev.imag
+        if abs(dot) < 0.3 * (abs(z) * abs(prev)):
+            out.append(z)                    # 真零点穿越：保持符号
+        else:
+            out.append(z if dot >= 0 else -z)
     return out
 
 
@@ -133,6 +158,9 @@ def _dense_group(band):
         gf = np.array([r[0] for r in rows])
         z5 = [np.array([complex(*r[2][2 * c:2 * c + 2]) for r in rows])
               for c in range(5)]
+        # z 空间插值（2026-11-03）：表存引擎原始 z，处处连续平滑——T 在
+        # z 零点/极点处符号歧义，unwrap 判据在渐变零点处失效（一个错判
+        # 翻转整段，实测 band3 ~100 Hz）；插值于 z、查询时 transform 即可。
         _SMOOTH_CACHE[band] = (gf, z5)
     return _SMOOTH_CACHE[band]
 
@@ -144,28 +172,32 @@ def _respond_at_smooth(band, f):
     gf, vals = g
     lg = math.log10(f)
     lgv = np.log10(gf)
-    return [complex(float(np.interp(lg, lgv, v.real)),
-                    float(np.interp(lg, lgv, v.imag))) for v in vals]
+    # z 空间插值 → 查询点 transform（z 处处连续；T 在零/极点处符号歧义）
+    return [transform_cts(complex(float(np.interp(lg, lgv, v.real)),
+                                  float(np.interp(lg, lgv, v.imag))))
+            for v in vals]
 
 
-def compute_responds(freqs):
+def compute_responds(freqs, band=None):
     """按频率求系统响应（band 组内最近邻 + adcFactor 变换）。
 
     SMOOTH_RESPONDS=True 时改用解卷绕平滑插值（渲染/处理两侧须同用）。
+    band=None → [legacy] 按频率值路由（band_of_freq，仅配 2026-11-02 前
+    的旧渲染）；band=int → 该频段组内取值（文件采样率路由，现行为）。
     返回 responds[5][N]；无法覆盖的频率（band 组缺失）按单位 1E-6/1E-9 常数
     （主工程 NoCal 语义兜底）。
     """
     out = [[] for _ in range(5)]
     for f in freqs:
-        band = band_of_freq(f)
+        b = band_of_freq(f) if band is None else int(band)
         if SMOOTH_RESPONDS:
-            z5 = _respond_at_smooth(band, f)   # 已变换
+            z5 = _respond_at_smooth(b, f)   # 已变换
         else:
             z5 = None
-            if band in _MT:
-                z5 = _nearest(_MT[band], f)
-            elif band in _AMT:
-                z5 = _nearest(_AMT[band], f)
+            if b in _MT:
+                z5 = _nearest(_MT[b], f)
+            elif b in _AMT:
+                z5 = _nearest(_AMT[b], f)
         if z5 is None:
             for c in range(5):
                 out[c].append(complex(1e-6, 0) if c < 2 else complex(1e-9, 0))
@@ -195,17 +227,23 @@ def _grid_for(band):
     return _GRID_CACHE[band]
 
 
-def responds_on_grid(freqs):
+def responds_on_grid(freqs, band=None):
     """compute_responds 的向量化入口（逐点语义恒等，供 v2 逐 bin 装配）。
 
     SMOOTH_RESPONDS=True 时改用解卷绕平滑插值。
+    band=None → [legacy] 按频率值路由；band=int → 整组用该频段（文件
+    采样率路由，现行为——渲染端传 band_of_sr(文件采样率)）。
     返回 [5] 个 numpy complex 数组，长度同 freqs。最近邻平局时保留较左侧
     网格点（与 _nearest 的"严格更优才替换"语义一致）。
     """
     import numpy as np
     f = np.asarray(freqs, dtype=float)
     if SMOOTH_RESPONDS:
-        bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+        if band is None:
+            bands = np.where(f > 400, 2, np.where(f > 8, 3,
+                                                  np.where(f > 0.8, 4, 5)))
+        else:
+            bands = np.full(len(f), int(band))
         out = [np.empty(len(f), dtype=complex) for _ in range(5)]
         for band in (2, 3, 4, 5):
             idx = np.nonzero(bands == band)[0]
@@ -218,10 +256,13 @@ def responds_on_grid(freqs):
             lgb = np.log10(np.maximum(f[idx], 1e-300))
             lgv = np.log10(gf)
             for c in range(5):
-                out[c][idx] = (np.interp(lgb, lgv, vals[c].real)
-                               + 1j * np.interp(lgb, lgv, vals[c].imag))
+                z = (np.interp(lgb, lgv, vals[c].real)
+                     + 1j * np.interp(lgb, lgv, vals[c].imag))
+                out[c][idx] = [transform_cts(complex(re, im))
+                               for re, im in zip(z.real, z.imag)]
         return out
-    bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+    bands = (np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+             if band is None else np.full(len(f), int(band)))
     out = [np.empty(len(f), dtype=complex) for _ in range(5)]
     for band in (2, 3, 4, 5):
         idx = np.nonzero(bands == band)[0]
