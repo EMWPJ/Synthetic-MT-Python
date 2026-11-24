@@ -6,14 +6,15 @@
   CTS_MT  — MT 处理网格 50 频点（band 3/4/5，SysCal_V7.exe 金标输出固化）
   CTS_AMT — AMT 处理网格 40 频点（band 2-5，syscal_dll 于同网格预计算）
 
-取值方式（2026-11-02 起默认 smooth）：符号解卷绕 + log-f 域复数线性插值于
-稠密 CTS 表（cts_dense，syscal_dll 于稠密网格预计算）——与 MTDataPro 原生
-SysCal 逆向库的平滑连续求值对齐：合成端烤进 counts 的响应与处理端除去的
-响应在任意方案网格上逐 bin 一致，阶梯残差消失（nearest 模式在非锚点方案
-网格上曾致低频 ρa ±10/15% 锯齿，见 AGENTS 陷阱清单）。band2 仅 AMT 表
-覆盖；band3-5 优先 MT 表（MT 合成主用），缺失回落 AMT 表。
-`SMOOTH_RESPONDS = False` 可回退 legacy nearest 模式（与主工程
-InterpolateCTSResponses 一致；仅用于复现旧行为，渲染/处理两侧须同切）。
+取值方式：稠密 CTS 表（cts_dense，syscal_dll 于稠密网格预计算，存引擎原始 z）
+在 log f 域对 z 的实/虚部线性插值——频率的连续函数，与 MTDataPro 原生 SysCal
+逆向库的平滑连续求值对齐：合成端烤进 counts 的响应与处理端除去的响应在任意
+方案网格上逐 bin 一致，无阶梯残差。band2 仅 AMT 表覆盖；band3-5 优先 MT 表
+（MT 合成主用），缺失回落 AMT 表。
+
+**标定必须是频率的连续函数（2026-11-23 定为铁律）**：legacy 50 点网格最近邻
+阶梯（`SMOOTH_RESPONDS=False`）已删除——任何情况下都按稠密表平滑插值。
+`SMOOTH_RESPONDS` 常量仅为兼容保留、不再生效。
 
 输出合同（与主工程一致）：responds[ch] = adcFactor * conj(z) / |z|^2，
 adcFactor = 1/2^23。
@@ -28,9 +29,8 @@ from .cts_mt import CTS_MT
 
 ADC_FACTOR = 1.0 / 8388608.0
 
-# 响应取值模式：True（默认）= 稠密 CTS 解卷绕平滑插值，对齐 MTDataPro
-# 原生 SysCal 平滑去标定；False = legacy 50 点网格最近邻（仅复现旧行为）。
-# 渲染与处理两侧须同用同一模式。
+# [deprecated] 标定恒为稠密表平滑插值（频率的连续函数）。本常量仅为兼容保留，
+# 赋任何值都不再生效——legacy 最近邻阶梯已于 2026-11-23 删除。
 SMOOTH_RESPONDS = True
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
@@ -85,32 +85,6 @@ def transform_cts(z: complex) -> complex:
     if denom < 1e-60:
         denom = 1e-60
     return complex(ADC_FACTOR * z.real / denom, -ADC_FACTOR * z.imag / denom)
-
-
-def _nearest(group, f):
-    best, bestd = None, None
-    for gf, z5 in group:
-        d = abs(gf - f)
-        if bestd is None or d < bestd:
-            best, bestd = z5, d
-    return best
-
-
-def _unwrap_group(rows):
-    """组内相位解卷绕：逐行翻转让相邻行相关为正（z→−z 约定翻转/±180°
-    相位卷绕还原）。
-
-    死区：相邻相关近正交（|dot| < 0.3·|a||b|，真零点两侧 T→0 符号本来
-    就翻转）不翻——否则把真零点穿越错翻成同号，零点附近插值即错。"""
-    out = [rows[0]]
-    for z in rows[1:]:
-        prev = out[-1]
-        dot = z.real * prev.real + z.imag * prev.imag
-        if abs(dot) < 0.3 * (abs(z) * abs(prev)):
-            out.append(z)                    # 真零点穿越：保持符号
-        else:
-            out.append(z if dot >= 0 else -z)
-    return out
 
 
 _SMOOTH_CACHE = {}
@@ -179,105 +153,57 @@ def _respond_at_smooth(band, f):
 
 
 def compute_responds(freqs, band=None):
-    """按频率求系统响应（band 组内最近邻 + adcFactor 变换）。
+    """按频率求系统响应（稠密 CTS 表平滑插值 + adcFactor 变换）——频率的连续函数。
 
-    SMOOTH_RESPONDS=True 时改用解卷绕平滑插值（渲染/处理两侧须同用）。
-    band=None → [legacy] 按频率值路由（band_of_freq，仅配 2026-11-02 前
-    的旧渲染）；band=int → 该频段组内取值（文件采样率路由，现行为）。
-    返回 responds[5][N]；无法覆盖的频率（band 组缺失）按单位 1E-6/1E-9 常数
+    band=None → [legacy] 按频率值路由（band_of_freq，仅 v1 lines 引擎沿用）；
+    band=int → 该频段组内取值（文件采样率路由，现行为）。
+    返回 responds[5][N]；无法覆盖的频率（band 无稠密表）按单位 1E-6/1E-9 常数
     （主工程 NoCal 语义兜底）。
     """
     out = [[] for _ in range(5)]
     for f in freqs:
         b = band_of_freq(f) if band is None else int(band)
-        if SMOOTH_RESPONDS:
-            z5 = _respond_at_smooth(b, f)   # 已变换
-        else:
-            z5 = None
-            if b in _MT:
-                z5 = _nearest(_MT[b], f)
-            elif b in _AMT:
-                z5 = _nearest(_AMT[b], f)
+        z5 = _respond_at_smooth(b, f)   # 已变换
         if z5 is None:
             for c in range(5):
                 out[c].append(complex(1e-6, 0) if c < 2 else complex(1e-9, 0))
             continue
-        if not SMOOTH_RESPONDS:
-            z5 = [transform_cts(v) for v in z5]
         for c in range(5):
             out[c].append(z5[c])
     return out
 
 
-# ── 预变换的网格缓存（responds_on_grid 用；_parse 后各组已按频率升序）──────
-_GRID_CACHE = {}
-
-
-def _grid_for(band):
-    if band not in _GRID_CACHE:
-        group = _MT.get(band) or _AMT.get(band)
-        if group is None:
-            _GRID_CACHE[band] = None
-        else:
-            import numpy as np
-            gf = np.array([gf for gf, _ in group])
-            tv = np.array([[transform_cts(z5[c]) for _, z5 in group]
-                           for c in range(5)])
-            _GRID_CACHE[band] = (gf, tv)
-    return _GRID_CACHE[band]
-
-
 def responds_on_grid(freqs, band=None):
     """compute_responds 的向量化入口（逐点语义恒等，供 v2 逐 bin 装配）。
 
-    SMOOTH_RESPONDS=True 时改用解卷绕平滑插值。
+    稠密 CTS 表在 log f 域对 z 的实/虚部线性插值（连续平滑，无阶梯）。
     band=None → [legacy] 按频率值路由；band=int → 整组用该频段（文件
     采样率路由，现行为——渲染端传 band_of_sr(文件采样率)）。
-    返回 [5] 个 numpy complex 数组，长度同 freqs。最近邻平局时保留较左侧
-    网格点（与 _nearest 的"严格更优才替换"语义一致）。
+    返回 [5] 个 numpy complex 数组，长度同 freqs。
     """
-    import numpy as np
     f = np.asarray(freqs, dtype=float)
-    if SMOOTH_RESPONDS:
-        if band is None:
-            bands = np.where(f > 400, 2, np.where(f > 8, 3,
-                                                  np.where(f > 0.8, 4, 5)))
-        else:
-            bands = np.full(len(f), int(band))
-        out = [np.empty(len(f), dtype=complex) for _ in range(5)]
-        for band in (2, 3, 4, 5):
-            idx = np.nonzero(bands == band)[0]
-            if not len(idx):
-                continue
-            g = _dense_group(band)
-            if g is None:
-                continue
-            gf, vals = g
-            lgb = np.log10(np.maximum(f[idx], 1e-300))
-            lgv = np.log10(gf)
-            for c in range(5):
-                z = (np.interp(lgb, lgv, vals[c].real)
-                     + 1j * np.interp(lgb, lgv, vals[c].imag))
-                out[c][idx] = [transform_cts(complex(re, im))
-                               for re, im in zip(z.real, z.imag)]
-        return out
-    bands = (np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
-             if band is None else np.full(len(f), int(band)))
-    out = [np.empty(len(f), dtype=complex) for _ in range(5)]
-    for band in (2, 3, 4, 5):
-        idx = np.nonzero(bands == band)[0]
+    if band is None:
+        bands = np.where(f > 400, 2, np.where(f > 8, 3, np.where(f > 0.8, 4, 5)))
+    else:
+        bands = np.full(len(f), int(band))
+    out = [np.full(len(f), np.nan, dtype=complex) for _ in range(5)]
+    for b in (2, 3, 4, 5):
+        idx = np.nonzero(bands == b)[0]
         if not len(idx):
             continue
-        grid = _grid_for(band)
-        if grid is None:
-            for c in range(5):
-                out[c][idx] = 1e-6 if c < 2 else 1e-9
+        g = _dense_group(b)
+        if g is None:
             continue
-        gf, tv = grid
-        pos = np.clip(np.searchsorted(gf, f[idx]), 1, len(gf) - 1)
-        d_lo = np.abs(gf[pos - 1] - f[idx])
-        d_hi = np.abs(gf[pos] - f[idx])
-        j = np.where(d_hi < d_lo, pos, pos - 1)
+        gf, vals = g
+        lgb = np.log10(np.maximum(f[idx], 1e-300))
+        lgv = np.log10(gf)
         for c in range(5):
-            out[c][idx] = tv[c][j]
+            z = (np.interp(lgb, lgv, vals[c].real)
+                 + 1j * np.interp(lgb, lgv, vals[c].imag))
+            out[c][idx] = [transform_cts(complex(re, im))
+                           for re, im in zip(z.real, z.imag)]
+    for c in range(5):                    # 无稠密表的 band：NoCal 语义兜底
+        miss = np.isnan(out[c])
+        if miss.any():
+            out[c][miss] = 1e-6 if c < 2 else 1e-9
     return out

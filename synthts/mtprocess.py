@@ -226,61 +226,26 @@ def process(model_file, ts_dir, site_name=None, bypass_screen=False):
     return results
 
 
-# ── 频域逐 bin 处理（v2.2，Hann 块窗 + 标定台阶感知）──────────────────
+# ── 频域逐 bin 处理（v2.2，Hann 块窗）──────────────────────────────────
 #
 # 动机：8 周期单频 DFT 核（±0.32 oct）在连续谱上引入"Z 核加权平均"偏置。
 # 渲染端保证逐 FFT bin E_c[k] = Σ_p T_{c,p}(f_k)·P̂_p[k]（线性代数精确），
 # 处理端按窗×bin 堆叠样本、逐 bin 做 2×2 复 LSQ。理论参考用渲染同构口径
 # （归一后锚点场各自 log 插值到 bin 频率再求 E·H⁻¹）。
 #
-# 块窗用 Hann（v2.2）：矩形块的 Dirichlet 远旁瓣（1/Δ 衰减）会把远处 CTS
-# 最近邻标定台阶的能量按通道不同混入本 bin（E/H 台阶相位不同），实测
-# p50 恶化 ~9 倍；Hann 主瓣仅 ±2 bin（核平均偏置在此宽度下可忽略），
-# 首旁瓣 −31dB、18dB/oct 滚降，台阶混叠被压回主瓣邻域。
+# 块窗用 Hann（v2.2）：矩形块的 Dirichlet 远旁瓣（1/Δ 衰减）会把远处能量
+# 混入本 bin，实测 p50 恶化 ~9 倍；Hann 主瓣仅 ±2 bin（核平均偏置在此宽度
+# 下可忽略），首旁瓣 −31dB、18dB/oct 滚降。
 #
-# CTS 台阶 bin：最近邻标定在网格中点处跳变（band5 相邻行相位差 25°~74°），
-# 处理窗核跨中点混叠时无单值 Z 可估——cal_step_mask 给出这些 bin。
-
-
-def cts_step_freqs(f_lo, f_hi, band=None):
-    """CTS 最近邻标定的台阶频率（[f_lo, f_hi] 内）。
-
-    含两类：各 band 网格相邻行中点，以及 band 交界（>400→2、>8→3、
-    >0.8→4）处两套网格边缘行之间的切换阶跃。
-    """
-    out = []
-    bands = (band,) if band else (2, 3, 4, 5)
-    for b in bands:
-        grid = calib._grid_for(b)
-        if grid is None:
-            continue
-        gf = grid[0]
-        for a, c in zip(gf[:-1], gf[1:]):
-            m = 0.5 * (a + c)
-            if f_lo <= m <= f_hi:
-                out.append(float(m))
-    for edge in (0.8, 8.0, 400.0):
-        if f_lo <= edge <= f_hi:
-            out.append(edge)
-    return sorted(set(out))
-
-
-def cal_step_mask(freqs, nfft, sr=None):
-    """标定台阶 bin 掩码：True=应排除（距最近台阶中点 ≤ Hann 主瓣半宽）。"""
-    freqs = np.asarray(freqs, dtype=float)
-    df = freqs[1] - freqs[0] if len(freqs) > 1 else 1.0
-    half = 2.0 * df                                    # Hann 主瓣半宽 ±2 bin
-    mask = np.zeros(len(freqs), dtype=bool)
-    lo, hi = float(freqs[1]), float(freqs[-1])
-    for m in cts_step_freqs(lo - half, hi + half):
-        mask |= np.abs(freqs - m) <= half
-    return mask
+# 标定是频率的连续函数（2026-11-23 铁律）：早期"CTS 最近邻台阶 bin 掩码"
+# （cts_step_freqs / cal_step_mask）连同最近邻取值一并删除——平滑标定下
+# 不存在无单值 Z 可估的 bin。
 
 
 def read_ts_binned(ts_path, nfft, hop=None, window='hann'):
     """读 TS 文件按 nfft 分窗 rfft（hop 缺省=nfft 不重叠；nfft//2=50% 重叠）。
 
-    window='hann'（缺省）抑制矩形块 Dirichlet 远旁瓣的标定台阶混叠；
+    window='hann'（缺省）抑制矩形块 Dirichlet 远旁瓣的跨 bin 混叠；
     window='rect' 保留旧行为。
     返回 (freqs[nb], Ch[4][nb, n_win])，Ch 顺序 Ex/Ey/Hx/Hy（未标定计数）。
     """
@@ -331,16 +296,15 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
     """频域逐 bin 阻抗估计（零核偏置）。
 
     aggregate='lsq'：跨窗堆叠样本做 2×2 复 LSQ（方差最优）。
-    window='hann'（缺省）/ 'rect'；exclude_cal_steps=True 时剔除 CTS 台阶
-    邻域 bin（最近邻标定中点 ±主瓣，无单值 Z 可估）。
+    window='hann'（缺省）/ 'rect'。
+    exclude_cal_steps：[deprecated] 已无效——标定平滑后不存在"CTS 台阶邻域
+    bin"，保留该参数只为兼容旧调用。
     返回 [(f_bin, Z_est, Z_theory_render, n_win, rel_err_max)]，
     bin 频率限于 [f_min, f_max]。理论参考为渲染同构口径（见上）。
     """
     sname = site_name or 'MTA'
     path = os.path.join(ts_dir, '%s.%s' % (sname, band))
     freqs, ch, nwin = read_ts_binned(path, nfft, hop=hop, window=window)
-    step_mask = cal_step_mask(freqs, nfft) if exclude_cal_steps \
-        else np.zeros(len(freqs), dtype=bool)
     model = load_site(model_file)
     # 渲染同构的归一后锚点场（nature 归一为逐锚点列缩放：渲染端 T 在被
     # 不同常数缩放的锚点场之间插值，其隐含 Z ≠ "Z 值直接插值"，必须
@@ -384,7 +348,7 @@ def process_fft_bins(model_file, ts_dir, band='TS5', nfft=1 << 10,
     n_skip = 0
     for k in range(1, len(freqs) - 1):
         f = freqs[k]
-        if not (f_min <= f <= f_max) or step_mask[k]:
+        if not (f_min <= f <= f_max):
             continue
         if f < MIN_WIN_PERIODS * (freqs[1] - freqs[0]):  # 窗长 < 4 周期的 bin 不处理
             n_skip += 1

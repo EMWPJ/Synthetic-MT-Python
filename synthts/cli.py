@@ -556,7 +556,8 @@ def main(argv=None):
             seen_names.add(name)
             sites.append((m, site))
 
-        # 1. 内置标定（CTS_MT/CTS_AMT 双表，band 组内最近邻）。
+        # 1. 内置标定（稠密 CTS 表平滑插值；lines 引擎沿用按频率值分 band
+        #    的 legacy 路由）。
         # responds 按各测点自身频率序计算（逐频独立，值与并集无异）——
         # add_calibration 按下标对齐场表，用全局并集序会错位
         responds_by_site = {}
@@ -604,7 +605,7 @@ def main(argv=None):
             # v2 噪声源：按记录带合成（设计 §3 方案 (a′)）；标定以逐 bin
             # calib 响应折进 T（render_fft.transfer_matrix），不走
             # add_calibration——与 mtprocess 处理端 compute_responds
-            # 同模式同口径（smooth/nearest 由 calib.SMOOTH_RESPONDS 统一）
+            # 同口径（稠密 CTS 平滑插值，band 按文件采样率路由）
             noise = NoiseSource(args.seed, src_params)
             plans = render_fft.plan_from_schemas(schemas, btime, etime)
             # 全局源结构一次抽签（段链/γ/事件跨档共享，v2.1）

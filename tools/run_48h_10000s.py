@@ -8,8 +8,8 @@
   TS5 8192   : 0.075-3.75 Hz
   TS5 15000  : 0.0075-0.075 Hz（bin 距使锚点近整 bin）
   TS5 150000 : 8e-5-0.0075 Hz（1e-4 Hz 恰在 bin 1；10000s 窗、33 窗）
-超低频带不做台阶剔除（±2bin 在 1e-4Hz 处覆盖整个十倍程，且 CTS 响应
-在超低频近平坦、近邻台阶幅度小）。
+（历史上超低频带不做"台阶剔除"；2026-11-23 标定全链平滑后该剔除已无效，
+exclude_cal_steps 仅为兼容保留。）
 """
 import math
 import os
@@ -89,7 +89,7 @@ def main():
     assert rc == 0, 'synthesis failed'
     dense_model = model          # -dense 0：模型即处理网格（锚点=网格点）
 
-    # 分带：(band, nfft, f_lo, f_hi, 台阶剔除, hop, 窗)
+    # 分带：(band, nfft, f_lo, f_hi, [已无效的台阶剔除开关], hop, 窗)
     # 分段档(TS3/TS4)必须 hop=nfft：窗=整段（跨段时间缝的拼接窗经半窗
     # Dirichlet 泄漏混入邻 bin 的 Z，实测 −15%）。超低频用 rect+大 nfft：
     # Hann ±1bin 在 1e-4Hz 处混合 ±50% 的 Z（重尾），rect 整数 bin 零泄漏。

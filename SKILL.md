@@ -98,17 +98,29 @@ python tools/mt_e2e_demo.py --source both   # lines + noise engines, four gates 
 
 Checks anchor impedances, inter-site coherence, full dense-grid impedance and
 spectral continuity (lines: PSD-gap ratio; noise: slope-normalized continuity
-probes >0.8); exit 0 only if both engines pass all four gates. Noise-mode Z
-floors (median ~2e-2) reflect the dense-CTS discretized response × continuous
-spectra — a processing physics floor, not an engine defect (design §5.3).
+probes >0.8); exit 0 only if both engines pass all four gates. Anchors sitting
+on an instrument notch null (100 Hz in TS3 — the band-3 comb notch erases the
+line at render time) are excluded from the anchor gate explicitly and reported;
+every other anchor must be checked (the script asserts none is silently
+missing). Noise-mode Z floors (median ~2e-2) reflect the dense-CTS
+discretized response × continuous spectra — a processing physics floor, not
+an engine defect (design §5.3).
 
-标定口径（2026-11-03 起）：渲染默认 smooth（稠密 CTS z 空间插值，
+标定口径：渲染用稠密 CTS 表平滑插值（z 空间 log-f 线性插值，
 全计划覆盖 + 自适应加密，dense ≡ native 至 1.7%/0.1°），band 按**文件
 采样率**路由（band_of_sr，与 MTDataPro/mtproc 同合同；按频率路由曾致
 TS5 0.8–7.5 Hz 烤错频段、ρa −93%/+859%，见 docs/parity_*.md §7）。
-synthts 数据经 mt-process-plot 处理用 `--cal cts`（写盘口径成对）；
-`--cal phoenix` 面向真 Phoenix 数据（E 符号口径不同）。旧 nearest
-渲染为 legacy 配对（两侧同切 SMOOTH_RESPONDS=False）。
+**标定必须是频率的连续函数（2026-11-23 铁律）**：旧的 50 点最近邻阶梯
+（`SMOOTH_RESPONDS=False`）已删除，合成端与处理端都只有平滑一种行为。
+synthts 数据经 mt-process-plot 处理用 `--cal cts`（与渲染同一张稠密表，
+写盘口径成对）；`--cal phoenix` 面向真 Phoenix 数据（E 符号口径不同）。
+
+**模型单位口径**：XMLSITE 的数值一律按 SI（Z = E/H，ρa = |Z|²/(ωμ0)）。合成后
+mt-process-plot（|Z|²/(ωμ0)）与 MTDataPro（EDI 阻抗为标准 [mV/km]/[nT] 口径，
+ρa = 0.2|Z|²/f）读出的 ρa 都**直接等于模型**。不要把模型电场乘 795.77 去凑
+"MTDataPro 单位"——SynthTSPy 照样按 SI 渲染，等于把大地电阻率放大 795.77² 倍
+（形态和相位都对，只有幅值差这个固定因子）；`-modem-units raw` 保留
+[mV/km]/[nT] 数值时同理。
 
 ### 4. Estimate impedance from synthesized data (Python)
 

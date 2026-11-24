@@ -5,8 +5,8 @@
   (a) Ex1 的 re/im：锚点（圆点）+ log10(f) 域分段线性插值（线）
   (b) |Ex1| 与相位（度）：插值复合后的连续性
   (c) Hx1 的 re/im 同 (a)
-  (d) CTS 标定 |r_Hx(f)| 最近邻（真台阶）+ 模型锚点竖线（对照：不连续的
-      是标定，不是场插值）
+  (d) CTS 标定 |r_Hx(f)|（稠密表平滑插值，连续）+ 模型锚点竖线
+      （2026-11-23 前此面板是最近邻阶梯，用来对照"不连续的是标定不是场插值"）
 数值输出：插值连续性 max|Δ|、re/im 过零段计数、相位最大逐点跳变。
 
 用法（仓库根目录）：python tools/interp_check.py
@@ -83,12 +83,12 @@ def main():
     ax = axes[3]
     r = calib.responds_on_grid(fgrid)
     ax.semilogx(fgrid, np.abs(r[2]), 'k-', lw=1.2,
-                label='|r_Hx(f)| CTS nearest-neighbour')
+                label='|r_Hx(f)| CTS (smooth dense interpolation)')
     for f in af:
         ax.axvline(f, color='b', ls=':', lw=0.7)
     ax.set_yscale('log')
-    ax.set_title('(d) CTS calibration |r_Hx|: the REAL steps (nearest '
-                 'neighbour); dotted = model anchors', fontsize=9)
+    ax.set_title('(d) CTS calibration |r_Hx|: continuous (dense '
+                 'interpolation); dotted = model anchors', fontsize=9)
     ax.set_xlabel('Frequency (Hz)')
     ax.legend(fontsize=8, loc='best')
 

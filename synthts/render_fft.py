@@ -3,7 +3,7 @@
 
 架构合同：五通道均为同一对源过程 {P1, P2} 的线性组合
     X_c(t) = Σ_p T_{c,p}(f) · P_p(t)，T = C_{c,p}(f)（log 域插值场指纹）
-    × responds_c(f)（CTS 最近邻）× μ0（磁道 A/m→B 折算，同 add_calibration）
+    × responds_c(f)（稠密 CTS 平滑插值）× μ0（磁道 A/m→B 折算，同 add_calibration）
 禁止 Z=EH⁻¹ 推导路线（§1 原则一）。逐 bin 线性代数 ⇒ E(f_k)=Z(f_k)H(f_k)
 精确（§2.4）。窗口档每记录独立渲染；连续档整轴单记录；记录等长 ⇒ 各档
 bin 网格与 T 每档装配一次、全部记录复用（§3.2）。

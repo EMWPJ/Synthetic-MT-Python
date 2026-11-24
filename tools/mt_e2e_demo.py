@@ -4,7 +4,8 @@
 测点 A：半空间 rho=100 Ohm*m；测点 B：rho=30 + 不同扰动与极化几何。
 验证四项：
   1) 频点加密（默认 2/倍频程，Wang et al. 2023 原文密度；锚点保留，
-     场按 log 域插值）后各测点锚点 Z 估计 vs 理论；
+     场按 log 域插值）后各测点锚点 Z 估计 vs 理论（落在仪器陷波零点上的
+     锚点显式排除，见 notch_null）；
   2) 同源性：相同频点 H 窗谱满足 H_B = M·H_A（M 常量 2x2）；
   3) 全加密网格 Z 估计 vs 插值理论；
   4) 谱连续性：lines 引擎=稀疏 vs 加密的间隙谱幅比（论文质量判据）；
@@ -12,9 +13,9 @@
 
 引擎自适应（--source lines|noise|both，默认 both）：
   lines 判据与 v1 完全一致；noise 逐 bin 处理用 Hann 块窗（抑制矩形块
-  Dirichlet 远旁瓣把远处 CTS 标定台阶按通道不同混入本 bin）并剔除 CTS
-  最近邻标定台阶邻域 bin（网格中点 ±主瓣内两套标定混窗，无单值 Z 可估
-  ——稀疏表最近邻逼近的合成约定伪影，真实仪器响应平滑无此台阶）。
+  Dirichlet 远旁瓣把远处能量按通道不同混入本 bin）。历史上还剔除过 CTS
+  最近邻标定台阶邻域 bin；2026-11-23 标定改为全链平滑后台阶不复存在，
+  exclude_cal_steps 仅为兼容保留的无效参数。
   noise 处理走 bypass_screen（独立复高斯半窗对的筛查通过率仅 ~4%）。
 
 用法（在仓库根目录执行）:
@@ -29,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from synthts import mtprocess
+from synthts import calib, mtprocess
 from synthts.cli import main as synth_main, nature_magnetic_amplitude
 from synthts.model import densify_frequencies, load_site
 
@@ -42,7 +43,7 @@ PERIODS = 128         # 合成平均段长(周期数)——加密网格需更长
 #     随段长线性下降; 32 时全网格 median~1.4e-2, 64 时 ~9e-3)
 DENSE = 2.0           # 加密密度(点/倍频程), Wang 2023 原文密度; 0=关闭
 
-# 各引擎的闸门③判据（noise 剔除 CTS 台阶邻域 bin 后逐 bin max<1%，见模块头注）
+# 各引擎的闸门③判据（noise 逐 bin max<1%，见模块头注）
 GATE3 = {'lines': 1e-2, 'noise': 1e-2}   # ρa/Z max<1%（全验证频带）
 
 
@@ -130,6 +131,39 @@ def continuity_ratio(site_name, out, f_lo, f_hi, grid):
     return (a_mid / a_ref) / slope
 
 
+# ── 仪器陷波零点：闸门①不参与的锚点 ──────────────────────────────────────
+# TS3/TS4 档的标定响应带梳状陷波（band3 每 50 Hz 一道、band4 的 50 Hz），零点
+# 处 |z| 线性过零。合成端按逐频点响应烤响应：落在零点上的谱线在文件里基本不
+# 存在（band3 的 100.0 Hz：稠密表 |z| 比 ±0.5 Hz 处小约 9e4 倍，24 位计数里
+# 只剩其它谱线的泄漏底），处理端放大回去的不是信号——该频点 Z 不可估，与
+# 处理链无关。旧脚本靠 CTS 台阶掩码碰巧盖住 100 Hz（66.67/133.33 Hz 两行的
+# 中点），台阶掩码删除后在此显式排除。判据与 mt-process-plot 的
+# mt_calib.degenerate_mask 同口径：|z| 低于 ±½ 倍频程邻域中位数 60 dB。
+NOTCH_DB = 60.0
+NOTCH_HALF_OCT = 0.5
+
+
+def notch_null(band, f):
+    """band（TS 名）档在 f 的标定响应是否退化到陷波零点（Z 四通道任一）。"""
+    g = calib._dense_group(calib.band_of_sr(mtprocess.TS_SPEC[band][2]))
+    if g is None:
+        return False
+    gf, vals = g
+    lg = np.log10(gf)
+    near = np.abs(np.log2(gf / f)) <= NOTCH_HALF_OCT
+    if not near.any():                              # f 在该档稠密表覆盖之外
+        return False
+    thr = 10.0 ** (-NOTCH_DB / 20.0)
+    lf = math.log10(f)
+    for c in range(4):                              # Ex/Ey/Hx/Hy
+        zc = np.asarray(vals[c])
+        z = np.interp(lf, lg, zc.real) + 1j * np.interp(lf, lg, zc.imag)
+        ref = np.median(np.abs(zc[near]))
+        if ref > 0 and abs(z) < thr * ref:
+            return True
+    return False
+
+
 
 
 # ── 频域逐 bin 处理（零核偏置；验证频带按带分派长窗）────────────────────
@@ -153,7 +187,7 @@ def process_bands(model_file, out_dir, site_name=None, bypass_screen=False,
     """全验证频带的逐 bin 阻抗估计：按带分派整记录 DFT，拼接 rows。
 
     返回 [(f, Z_est, Z_th, nwin, err)]（f 升序、跨带去重）。
-    CTS 台阶邻域 bin 已由 process_fft_bins(exclude_cal_steps=True) 剔除。
+    exclude_cal_steps 已无效（2026-11-23 标定平滑，无 CTS 台阶），仅为兼容保留。
     """
     if site_name is None:
         site_name = os.path.basename(model_file).split('.')[0].upper()
@@ -201,21 +235,36 @@ def run_engine(engine, name):
     print()
     print('=== 2. 锚点 Z 验证（频域逐 bin LSQ：窗化谱跨窗堆叠，零核偏置）===')
     worst_anchor = 0.0
+    notch_skipped = []
     for model, tag2, odir in ((model_a, 'A', sparse_dir), (model_b, 'B', out)):
         site_nm = os.path.basename(str(model)).split('.')[0].upper()
         rows = process_bands(str(model), str(odir), site_name=site_nm)
         # 锚点 = 模型 FREQS 的最近 bin（容差 = 半个 bin 宽）
         anchor_rows = []
+        covered = set()
         for f in FREQS:
             band, nfft_b = (('TS5', 8192) if f < 1.0 else
                             ('TS4', 16384) if f <= 32.0 else ('TS3', 8192))
             bw = (15.0 if band == 'TS5' else 150.0 if band == 'TS4' else 2400.0) / nfft_b
+            if notch_null(band, f):          # 仪器陷波零点：合成数据里无信号
+                if f not in notch_skipped:
+                    notch_skipped.append(f)
+                continue
             cand = [r for r in rows if abs(r[0] - f) < 0.45 * bw]
+            if cand:
+                covered.add(f)
             anchor_rows.extend(cand)
+        # 锚点要么被检验、要么显式排除——不许再静默漏检（100 Hz 曾被台阶
+        # 掩码吞掉而无任何提示）
+        lost = [f for f in FREQS if f not in covered and f not in notch_skipped]
+        assert not lost, 'anchor bins missing from processed rows: %s' % lost
         errs = max(r[4] for r in anchor_rows)
         worst_anchor = max(worst_anchor, errs)
         note = '（稀疏合成）' if tag2 == 'A' else '（加密合成）'
         print('  测点%s%s: 锚点最大相对误差 = %.3e' % (tag2, note, errs))
+    if notch_skipped:
+        print('  仪器陷波零点锚点（不参与）: %s Hz'
+              % ', '.join('%g' % f for f in notch_skipped))
 
     print()
     print('=== 3. 同源性验证（H_B = M·H_A 拟合残差）===')

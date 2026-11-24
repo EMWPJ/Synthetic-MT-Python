@@ -12,7 +12,12 @@
       band2  9-12500 Hz（TS2 10-12000）
       band3  0.9-1250 Hz（TS3 1-1200）
       band4  0.009-80 Hz（TS4 0.1-75；AMT 连续 TS4 到 0.01）
-      band5  1.4e-5-7.7 Hz（TS5 到 7.5 = 15 Hz 链 Nyquist）
+      band5  5e-6-7.7 Hz（TS5 到 7.5 = 15 Hz 链 Nyquist；下限 2026-11-24 由
+             1.4e-5 下延——模型/处理方案的频点可低至 1e-5 Hz，低于表下限的
+             频率会被钳位在边缘值：原生引擎 H 道 |z|∝f 直到 1e-7 Hz，钳位
+             让合成进去的响应在 1e-5–1.4e-5 Hz 失真，原生/MTDataPro 去标定
+             失配（1e-5 Hz 处 ρa 偏低约 49%），而同表去标定的 mt skill 看
+             不见——标定必须是频率的连续函数，表须覆盖模型的全部频点）
     底网格 48 点/倍频程 + 自适应加密（相邻锚点相位步 >10° 或幅值比
     离 1 超 5% 时二分，8 轮——解析带缘 knee 与通道零点）+ 50 Hz 工频
     陷波邻域加密 + 稀疏表全部锚点频率。
@@ -55,7 +60,11 @@ import syscal_native as sn                                      # noqa: E402
 
 # 每 band 全计划覆盖（渲染按文件采样率路由，见 calib.band_of_sr）
 _RANGES = {2: (9.0, 11000.0), 3: (0.9, 1250.0),  # band2 上缘 11.3k+ 出 0x4CD 括号
-           4: (0.009, 80.0), 5: (1.4e-5, 7.7)}
+           4: (0.009, 80.0), 5: (5e-6, 7.7)}
+# 底网格分段（未列出的 band 整段一个相位）：band5 下段是 2026-11-24 新增的，
+# 上段保持 2026-11-03 起算的原网格相位（1.4e-5 × 2^(k/48)）——旧范围内
+# （≥1.4e-5 Hz）的行逐位不变，已有渲染结果与黄金值不受影响；新行只在下限以下。
+_SEGMENTS = {5: ((5e-6, 1.4e-5), (1.4e-5, 7.7))}
 
 
 def _eval_channel(sess, band, f):
@@ -75,11 +84,12 @@ def build_grid(sess, band):
     （相位狂转区）在 12/oct 下插值误差达 5-50%，加密后收敛。"""
     lo, hi = _RANGES[band]
     g = []
-    f = lo
-    while f < hi:                       # 48 点/倍频程
-        g.append(f)
-        f *= 2 ** (1 / 48.0)
-    g.append(hi)
+    for a, b in _SEGMENTS.get(band, ((lo, hi),)):
+        f = a
+        while f < b:                       # 48 点/倍频程
+            g.append(f)
+            f *= 2 ** (1 / 48.0)
+        g.append(b)
     if band in (3, 4):                  # 50 Hz 工频陷波邻域加密
         g.extend(np.arange(44.0, 56.01, 0.2))
         g.extend(np.arange(49.0, 51.01, 0.05))
@@ -153,7 +163,7 @@ def main():
         fh.write('行 = (freq_hz, band, [re, im] x 5 通道 Ex,Ey,Hx,Hy,Hz)；\n')
         fh.write('每 band 全计划覆盖（渲染按文件采样率路由，见 calib.band_of_sr）：\n')
         fh.write('band2 9-12500 / band3 0.9-1250 / band4 0.009-80 /\n')
-        fh.write('band5 1.4e-5-7.7 Hz；12 点/倍频程 + 50 Hz 陷波加密 + 稀疏锚点。\n')
+        fh.write('band5 5e-6-7.7 Hz；12 点/倍频程 + 50 Hz 陷波加密 + 稀疏锚点。\n')
         fh.write('"""\n')
         fh.write('DENSE_CTS = [\n')
         for f, band, vals in rows:

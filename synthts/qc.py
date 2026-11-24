@@ -9,7 +9,7 @@
   输出    ：qc_<site>.png（matplotlib 可选，缺省退化纯文本/JSON）+
             qc_summary.json + 文本表。
 
-判读：噪声源在中低频有 CTS 最近邻×连续谱的物理地板（设计 §5.3），
+判读：噪声源在中低频有离散 CTS × 连续谱的物理地板（设计 §5.3），
 中位 |Δρa/ρa| >10% 时给出提示行；不作为硬性失败（报告型工具）。
 """
 import glob
@@ -172,7 +172,7 @@ def qc_directory(data_dir, max_freqs=40, make_png=True, say=print):
                    m[ij]['n_freq']))
         if max(m[ij]['rho_med_rel'] for ij in ('XY', 'YX')) > 0.10:
             say('    提示: 中位 ρa 偏差 >10% —— 噪声源低频有物理地板'
-                '（CTS 最近邻 × 连续谱），短记录尤甚；加长 -dur 或参考'
+                '（离散 CTS × 连续谱），短记录尤甚；加长 -dur 或参考'
                 '设计文档 §5.3')
         summary['sites'][name] = {
             'model': os.path.basename(path),
